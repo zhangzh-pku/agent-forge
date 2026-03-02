@@ -1,0 +1,34 @@
+// Package engine implements the ReAct execution loop.
+package engine
+
+import (
+	"context"
+
+	"github.com/agentforge/agentforge/pkg/model"
+)
+
+// LLMRequest is the input to an LLM call.
+type LLMRequest struct {
+	Messages    []model.MemoryMessage `json:"messages"`
+	ModelConfig *model.ModelConfig    `json:"model_config,omitempty"`
+}
+
+// LLMResponse is the output of an LLM call.
+type LLMResponse struct {
+	Content      string            `json:"content"`
+	ToolCalls    []ToolCall        `json:"tool_calls,omitempty"`
+	TokenUsage   *model.TokenUsage `json:"token_usage,omitempty"`
+	FinishReason string            `json:"finish_reason,omitempty"`
+}
+
+// ToolCall represents a tool invocation requested by the LLM.
+type ToolCall struct {
+	Name string `json:"name"`
+	Args string `json:"args"` // JSON-encoded arguments
+}
+
+// LLMClient abstracts the language model backend.
+type LLMClient interface {
+	// Chat sends a completion request. Must respect context cancellation.
+	Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error)
+}

@@ -1,0 +1,19 @@
+# Build artifacts
+bin/
+build.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Terraform
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.backup
+deploy/terraform/*.tfplan
+deploy/terraform/placeholder.zip
+
+# OS
+.DS_Store
