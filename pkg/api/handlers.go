@@ -2,11 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/agentforge/agentforge/pkg/model"
+	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/task"
 )
 
@@ -140,7 +142,7 @@ func (h *Handler) createTask(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getTask(w http.ResponseWriter, r *http.Request, taskID string) {
 	tenant := GetTenant(r.Context())
-	t, err := h.svc.Get(r.Context(), tenant.TenantID, taskID)
+	t, err := h.svc.GetForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
 		return
@@ -162,9 +164,14 @@ func (h *Handler) abortTask(w http.ResponseWriter, r *http.Request, taskID strin
 
 	t, err := h.svc.Abort(r.Context(), tenant.TenantID, taskID, &task.AbortRequest{
 		TenantID: tenant.TenantID,
+		UserID:   tenant.UserID,
 		Reason:   body.Reason,
 	})
 	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -192,6 +199,7 @@ func (h *Handler) resumeTask(w http.ResponseWriter, r *http.Request, taskID stri
 
 	resp, err := h.svc.Resume(r.Context(), taskID, &task.ResumeRequest{
 		TenantID:            tenant.TenantID,
+		UserID:              tenant.UserID,
 		FromRunID:           body.FromRunID,
 		FromStepIndex:       body.FromStepIndex,
 		ModelConfigOverride: body.ModelConfigOverride,
@@ -218,8 +226,12 @@ func (h *Handler) listSteps(w http.ResponseWriter, r *http.Request, taskID, runI
 		limit = 1000
 	}
 
-	steps, err := h.svc.ListSteps(r.Context(), tenant.TenantID, taskID, runID, from, limit)
+	steps, err := h.svc.ListStepsForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID, runID, from, limit)
 	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task or run not found"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

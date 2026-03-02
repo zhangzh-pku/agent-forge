@@ -133,6 +133,18 @@ func TestGetTask(t *testing.T) {
 	}
 }
 
+func TestGetTaskWrongUser(t *testing.T) {
+	svc, _, _ := newTestService()
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+
+	_, err := svc.GetForUser(ctx, "tnt_1", "user_2", resp.TaskID)
+	if err == nil {
+		t.Fatal("expected error for wrong user")
+	}
+}
+
 func TestAbortTask(t *testing.T) {
 	svc, _, _ := newTestService()
 	ctx := context.Background()
@@ -224,6 +236,27 @@ func TestResumeTask(t *testing.T) {
 	}
 	if task.ActiveRunID != resumeResp.RunID {
 		t.Fatal("expected active_run_id updated")
+	}
+}
+
+func TestResumeWrongUser(t *testing.T) {
+	svc, store, _ := newTestService()
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	store.ClaimRun(ctx, resp.TaskID, resp.RunID)
+	createStepsWithCheckpoints(ctx, store, resp.RunID, 2)
+	store.CompleteRun(ctx, resp.TaskID, resp.RunID, model.RunStatusSucceeded)
+	store.UpdateTaskStatus(ctx, resp.TaskID, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}, model.TaskStatusSucceeded)
+
+	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
+		TenantID:      "tnt_1",
+		UserID:        "user_2",
+		FromRunID:     resp.RunID,
+		FromStepIndex: 0,
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong user on resume")
 	}
 }
 
@@ -380,6 +413,12 @@ func TestListSteps(t *testing.T) {
 	_, err = svc.ListSteps(ctx, "tnt_wrong", resp.TaskID, resp.RunID, 0, 100)
 	if err == nil {
 		t.Fatal("expected error for wrong tenant")
+	}
+
+	// Wrong user.
+	_, err = svc.ListStepsForUser(ctx, "tnt_1", "user_2", resp.TaskID, resp.RunID, 0, 100)
+	if err == nil {
+		t.Fatal("expected error for wrong user")
 	}
 }
 

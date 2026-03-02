@@ -30,6 +30,7 @@ type CreateResponse struct {
 // ResumeRequest is the input for resuming a task from a checkpoint.
 type ResumeRequest struct {
 	TenantID            string             `json:"tenant_id"`
+	UserID              string             `json:"user_id,omitempty"`
 	FromRunID           string             `json:"from_run_id"`
 	FromStepIndex       int                `json:"from_step_index"`
 	ModelConfigOverride *model.ModelConfig `json:"model_config_override,omitempty"`
@@ -44,6 +45,7 @@ type ResumeResponse struct {
 // AbortRequest is the input for aborting a task.
 type AbortRequest struct {
 	TenantID string `json:"tenant_id"`
+	UserID   string `json:"user_id,omitempty"`
 	Reason   string `json:"reason"`
 }
 
@@ -128,11 +130,16 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 
 // Get retrieves task metadata.
 func (s *Service) Get(ctx context.Context, tenantID, taskID string) (*model.Task, error) {
+	return s.GetForUser(ctx, tenantID, "", taskID)
+}
+
+// GetForUser retrieves task metadata and validates tenant/user access.
+func (s *Service) GetForUser(ctx context.Context, tenantID, userID, taskID string) (*model.Task, error) {
 	task, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	if task.TenantID != tenantID {
+	if !hasTaskAccess(task, tenantID, userID) {
 		return nil, state.ErrNotFound
 	}
 	return task, nil
@@ -140,11 +147,19 @@ func (s *Service) Get(ctx context.Context, tenantID, taskID string) (*model.Task
 
 // Abort marks a task for abortion.
 func (s *Service) Abort(ctx context.Context, tenantID, taskID string, req *AbortRequest) (*model.Task, error) {
+	if req == nil {
+		req = &AbortRequest{TenantID: tenantID}
+	}
+	return s.AbortForUser(ctx, tenantID, req.UserID, taskID, req)
+}
+
+// AbortForUser marks a task for abortion with tenant/user access validation.
+func (s *Service) AbortForUser(ctx context.Context, tenantID, userID, taskID string, req *AbortRequest) (*model.Task, error) {
 	task, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	if task.TenantID != tenantID {
+	if !hasTaskAccess(task, tenantID, userID) {
 		return nil, state.ErrNotFound
 	}
 
@@ -161,7 +176,7 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 	if err != nil {
 		return nil, err
 	}
-	if task.TenantID != req.TenantID {
+	if !hasTaskAccess(task, req.TenantID, req.UserID) {
 		return nil, state.ErrNotFound
 	}
 
@@ -240,12 +255,17 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 
 // ListSteps retrieves steps for a run with pagination.
 func (s *Service) ListSteps(ctx context.Context, tenantID, taskID, runID string, from, limit int) ([]*model.Step, error) {
+	return s.ListStepsForUser(ctx, tenantID, "", taskID, runID, from, limit)
+}
+
+// ListStepsForUser retrieves steps for a run with tenant/user access validation.
+func (s *Service) ListStepsForUser(ctx context.Context, tenantID, userID, taskID, runID string, from, limit int) ([]*model.Step, error) {
 	// Verify tenant access.
 	task, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	if task.TenantID != tenantID {
+	if !hasTaskAccess(task, tenantID, userID) {
 		return nil, state.ErrNotFound
 	}
 	// Verify that the run belongs to this task.
@@ -253,4 +273,15 @@ func (s *Service) ListSteps(ctx context.Context, tenantID, taskID, runID string,
 		return nil, state.ErrNotFound
 	}
 	return s.store.ListSteps(ctx, runID, from, limit)
+}
+
+func hasTaskAccess(task *model.Task, tenantID, userID string) bool {
+	if task.TenantID != tenantID {
+		return false
+	}
+	// Allow legacy callers without user scope, but enforce user isolation when provided.
+	if userID != "" && task.UserID != "" && task.UserID != userID {
+		return false
+	}
+	return true
 }

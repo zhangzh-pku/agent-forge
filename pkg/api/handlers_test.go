@@ -352,6 +352,55 @@ func TestGetTaskWrongTenant(t *testing.T) {
 	}
 }
 
+func TestGetTaskWrongUser(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	// Create a task as user_1.
+	rr := doRequest(mux, "POST", "/tasks", map[string]string{"prompt": "test"})
+	var createResp map[string]string
+	json.NewDecoder(rr.Body).Decode(&createResp)
+
+	// Try to get it as user_2 in the same tenant.
+	req := httptest.NewRequest("GET", "/tasks/"+createResp["task_id"], nil)
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_2")
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, req)
+
+	if rr2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for wrong user, got %d", rr2.Code)
+	}
+}
+
+func TestListStepsWrongUser(t *testing.T) {
+	mux, store := setupTestServer()
+	ctx := context.Background()
+
+	rr := doRequest(mux, "POST", "/tasks", map[string]string{"prompt": "test"})
+	var createResp map[string]string
+	json.NewDecoder(rr.Body).Decode(&createResp)
+
+	// Seed one step for this run.
+	store.PutStep(ctx, &model.Step{
+		RunID:     createResp["run_id"],
+		StepIndex: 0,
+		Type:      model.StepTypeLLMCall,
+		Status:    model.StepStatusOK,
+		TSStart:   time.Now().UTC(),
+		TSEnd:     time.Now().UTC(),
+	})
+
+	req := httptest.NewRequest("GET", "/tasks/"+createResp["task_id"]+"/runs/"+createResp["run_id"]+"/steps", nil)
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_2")
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, req)
+
+	if rr2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for wrong user step listing, got %d: %s", rr2.Code, rr2.Body.String())
+	}
+}
+
 func TestIdempotencyKeyViaHeader(t *testing.T) {
 	mux, _ := setupTestServer()
 
@@ -561,6 +610,20 @@ func TestWSConnectTaskOwnershipValidation(t *testing.T) {
 		t.Fatalf("expected 0 connections, got %d", len(conns))
 	}
 
+	// Same tenant but different user should also be rejected.
+	body, _ = json.Marshal(map[string]string{
+		"connection_id": "conn_wrong_user",
+		"task_id":       createResp.TaskID,
+	})
+	req = httptest.NewRequest("POST", "/ws/connect", bytes.NewReader(body))
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_2")
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-user WS connect, got %d: %s", rr.Code, rr.Body.String())
+	}
+
 	// tnt_1 should be able to connect.
 	body, _ = json.Marshal(map[string]string{
 		"connection_id": "conn_legit",
@@ -594,8 +657,8 @@ func TestListStepsWrongRunID(t *testing.T) {
 
 	// Try to list steps with a non-existent run_id.
 	rr = doRequest(mux, "GET", "/tasks/"+createResp["task_id"]+"/runs/nonexistent_run/steps?from=0&limit=10", nil)
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 for wrong run_id, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for wrong run_id, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

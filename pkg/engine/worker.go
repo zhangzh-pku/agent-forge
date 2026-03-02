@@ -2,9 +2,8 @@ package engine
 
 import (
 	"context"
-	"fmt"
-
 	"errors"
+	"fmt"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/model"
@@ -68,20 +67,38 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		return fmt.Errorf("worker: claim run: %w", err)
 	}
 
-	// Update task status to RUNNING.
-	if err := w.store.UpdateTaskStatus(ctx, msg.TaskID,
+	// Update task status to RUNNING only when this message run is still active.
+	if err := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
 		[]model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning},
-		model.TaskStatusRunning); err != nil && !errors.Is(err, state.ErrConflict) {
-		log.Error("worker: update task status to RUNNING failed", map[string]interface{}{"error": err.Error()})
+		model.TaskStatusRunning); err != nil {
+		if errors.Is(err, state.ErrConflict) || errors.Is(err, state.ErrNotFound) {
+			log.Info("worker: task claim failed (run not active), skipping", map[string]interface{}{"error": err.Error()})
+			_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusAborted)
+			return nil
+		}
+		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
+		return fmt.Errorf("worker: update task status to RUNNING: %w", err)
 	}
 
 	// Step 2: Load task and run.
 	task, err := w.store.GetTask(ctx, msg.TaskID)
 	if err != nil {
+		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
 		return fmt.Errorf("worker: get task: %w", err)
+	}
+	if task.TenantID != msg.TenantID {
+		log.Error("worker: tenant mismatch in message", map[string]interface{}{
+			"task_tenant_id": task.TenantID,
+			"msg_tenant_id":  msg.TenantID,
+		})
+		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
+		_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed)
+		return nil
 	}
 	run, err := w.store.GetRun(ctx, msg.TaskID, msg.RunID)
 	if err != nil {
+		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
+		_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed)
 		return fmt.Errorf("worker: get run: %w", err)
 	}
 
@@ -99,8 +116,17 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 
 	// Step 4: Register tools with workspace (including fs.export with artifact store).
 	registry := NewRegistry()
-	for _, tool := range NewFSToolsWithArtifacts(ws, w.artifacts) {
+	exportPrefix := fmt.Sprintf("exports/%s/%s/%s", msg.TenantID, msg.TaskID, msg.RunID)
+	for _, tool := range NewFSToolsWithArtifactsPrefix(ws, w.artifacts, exportPrefix) {
 		registry.Register(tool)
+	}
+	// Register caller-provided tools after built-ins so custom tools can override.
+	if w.tools != nil {
+		for _, name := range w.tools.List() {
+			if tool := w.tools.Get(name); tool != nil {
+				registry.Register(tool)
+			}
+		}
 	}
 
 	// Step 5: Run the engine.
@@ -108,15 +134,15 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	result, err := eng.Execute(ctx, task, run, ws)
 	if err != nil {
 		log.Error("worker: engine error", map[string]interface{}{"error": err.Error()})
-		w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
-		w.store.UpdateTaskStatus(ctx, msg.TaskID,
+		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
+		_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
 			[]model.TaskStatus{model.TaskStatusRunning},
 			model.TaskStatusFailed)
 		return nil // Ack — don't retry engine failures.
 	}
 
 	// Step 6: Finalize.
-	w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, result.Status)
+	_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, result.Status)
 
 	taskStatus := model.TaskStatusSucceeded
 	switch result.Status {
@@ -125,7 +151,7 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	case model.RunStatusAborted:
 		taskStatus = model.TaskStatusAborted
 	}
-	w.store.UpdateTaskStatus(ctx, msg.TaskID,
+	_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
 		[]model.TaskStatus{model.TaskStatusRunning},
 		taskStatus)
 

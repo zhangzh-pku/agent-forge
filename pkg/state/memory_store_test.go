@@ -162,6 +162,31 @@ func TestUpdateTaskStatus(t *testing.T) {
 	}
 }
 
+func TestUpdateTaskStatusForRun(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	task := &model.Task{
+		TaskID:      "task_1",
+		ActiveRunID: "run_1",
+		Status:      model.TaskStatusQueued,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	s.PutTask(ctx, task)
+
+	// Valid transition when active_run_id matches.
+	if err := s.UpdateTaskStatusForRun(ctx, "task_1", "run_1", []model.TaskStatus{model.TaskStatusQueued}, model.TaskStatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reject mismatched active run.
+	if err := s.UpdateTaskStatusForRun(ctx, "task_1", "run_2", []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusSucceeded); err != ErrConflict {
+		t.Fatalf("expected ErrConflict for wrong run, got %v", err)
+	}
+}
+
 func TestSetAbortRequested(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()

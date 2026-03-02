@@ -148,6 +148,32 @@ func (s *MemoryStore) UpdateTaskStatus(_ context.Context, taskID string, from []
 	return nil
 }
 
+func (s *MemoryStore) UpdateTaskStatusForRun(_ context.Context, taskID, runID string, from []model.TaskStatus, to model.TaskStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.tasks[taskID]
+	if !ok {
+		return ErrNotFound
+	}
+	if t.ActiveRunID != runID {
+		return ErrConflict
+	}
+	allowed := false
+	for _, f := range from {
+		if t.Status == f {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return ErrConflict
+	}
+	t.Status = to
+	t.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 func (s *MemoryStore) SetAbortRequested(_ context.Context, taskID string, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

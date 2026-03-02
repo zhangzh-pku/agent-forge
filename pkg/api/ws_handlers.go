@@ -49,7 +49,7 @@ func (h *WSHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Validate that the task belongs to the requesting tenant.
 	if h.taskSvc != nil {
-		if _, err := h.taskSvc.Get(r.Context(), tenant.TenantID, body.TaskID); err != nil {
+		if _, err := h.taskSvc.GetForUser(r.Context(), tenant.TenantID, tenant.UserID, body.TaskID); err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
 			return
 		}

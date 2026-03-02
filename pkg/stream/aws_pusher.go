@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/agentforge/agentforge/pkg/model"
 )
@@ -42,6 +43,13 @@ type AWSPusher struct {
 	// In production: apigatewaymanagementapi.Client.PostToConnection
 	// For testing: can be replaced with a mock.
 	postFunc func(ctx context.Context, connectionID string, data []byte) error
+
+	// chunkCfg enables time/byte chunked pushes when non-nil.
+	chunkCfg *ChunkerConfig
+
+	mu              sync.Mutex
+	chunkers        map[string]*connectionChunker
+	deadConnections map[string]bool
 }
 
 // NewAWSPusher creates a new AWS API Gateway pusher.
@@ -53,7 +61,23 @@ func NewAWSPusher(endpoint string, postFunc func(ctx context.Context, connection
 	}
 }
 
+// NewChunkedAWSPusher creates an AWS pusher that batches events per connection
+// and flushes by time or byte threshold.
+func NewChunkedAWSPusher(endpoint string, cfg ChunkerConfig, postFunc func(ctx context.Context, connectionID string, data []byte) error) *AWSPusher {
+	return &AWSPusher{
+		endpoint:        endpoint,
+		postFunc:        postFunc,
+		chunkCfg:        &cfg,
+		chunkers:        make(map[string]*connectionChunker),
+		deadConnections: make(map[string]bool),
+	}
+}
+
 func (p *AWSPusher) Push(ctx context.Context, connectionID string, event *model.StreamEvent) (bool, error) {
+	if p.chunkCfg != nil {
+		return p.pushChunked(ctx, connectionID, event)
+	}
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		return false, err
@@ -68,4 +92,102 @@ func (p *AWSPusher) Push(ctx context.Context, connectionID string, event *model.
 		return true, err
 	}
 	return true, nil
+}
+
+func (p *AWSPusher) pushChunked(ctx context.Context, connectionID string, event *model.StreamEvent) (bool, error) {
+	cc := p.getOrCreateChunker(connectionID)
+	if cc == nil {
+		return false, nil
+	}
+	cc.setContext(ctx)
+
+	if err := cc.chunker.Write(event); err != nil {
+		return true, err
+	}
+
+	// Flush terminal events immediately so clients receive completion quickly.
+	if event.Type == model.StreamEventComplete || event.Type == model.StreamEventError {
+		cc.chunker.Flush()
+	}
+
+	if err := cc.chunker.LastError(); err != nil {
+		if IsGoneError(err) {
+			p.markDead(connectionID)
+			return false, nil
+		}
+		return true, err
+	}
+	if p.isDead(connectionID) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (p *AWSPusher) getOrCreateChunker(connectionID string) *connectionChunker {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.deadConnections[connectionID] {
+		return nil
+	}
+	if c, ok := p.chunkers[connectionID]; ok {
+		return c
+	}
+
+	cc := &connectionChunker{}
+	cfg := *p.chunkCfg
+	cc.chunker = NewChunker(cfg, func(data []byte) error {
+		pushCtx := cc.context()
+		if pushCtx == nil {
+			pushCtx = context.Background()
+		}
+		err := p.postFunc(pushCtx, connectionID, data)
+		if err != nil && IsGoneError(err) {
+			p.markDead(connectionID)
+		}
+		return err
+	})
+	p.chunkers[connectionID] = cc
+	return cc
+}
+
+func (p *AWSPusher) isDead(connectionID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.deadConnections[connectionID]
+}
+
+func (p *AWSPusher) markDead(connectionID string) {
+	var cc *connectionChunker
+	p.mu.Lock()
+	if p.deadConnections[connectionID] {
+		p.mu.Unlock()
+		return
+	}
+	p.deadConnections[connectionID] = true
+	cc = p.chunkers[connectionID]
+	delete(p.chunkers, connectionID)
+	p.mu.Unlock()
+
+	if cc != nil {
+		cc.chunker.Stop()
+	}
+}
+
+type connectionChunker struct {
+	chunker *Chunker
+	ctxMu   sync.RWMutex
+	ctx     context.Context
+}
+
+func (c *connectionChunker) setContext(ctx context.Context) {
+	c.ctxMu.Lock()
+	c.ctx = ctx
+	c.ctxMu.Unlock()
+}
+
+func (c *connectionChunker) context() context.Context {
+	c.ctxMu.RLock()
+	defer c.ctxMu.RUnlock()
+	return c.ctx
 }

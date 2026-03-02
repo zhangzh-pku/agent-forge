@@ -140,10 +140,34 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		}
 		if currentTask.AbortRequested {
 			log.Info("engine: abort requested, stopping")
+			now := time.Now().UTC()
+			abortStep := &model.Step{
+				RunID:        run.RunID,
+				StepIndex:    stepIdx,
+				Type:         model.StepTypeFinal,
+				Status:       model.StepStatusOK,
+				Input:        "abort_requested",
+				Output:       currentTask.AbortReason,
+				TSStart:      now,
+				TSEnd:        now,
+				LatencyMS:    0,
+				ErrorCode:    "ABORTED",
+				ErrorMessage: currentTask.AbortReason,
+			}
+			if err := e.store.PutStep(ctx, abortStep); err != nil && !errors.Is(err, state.ErrConflict) {
+				log.Error("engine: write abort step failed", map[string]interface{}{"error": err.Error()})
+			}
+			if err := e.store.UpdateLastStepIndex(ctx, task.TaskID, run.RunID, stepIdx); err != nil {
+				log.Error("engine: update last step index failed", map[string]interface{}{"error": err.Error(), "step_index": stepIdx})
+			}
+			e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventComplete, map[string]interface{}{
+				"status": "aborted",
+				"reason": currentTask.AbortReason,
+			})
 			e.metrics.TaskAborted()
 			return &RunResult{
 				Status:   model.RunStatusAborted,
-				LastStep: stepIdx - 1,
+				LastStep: stepIdx,
 			}, nil
 		}
 

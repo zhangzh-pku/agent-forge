@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -140,6 +141,52 @@ func TestEngineAbort(t *testing.T) {
 	}
 }
 
+func TestEngineAbortEmitsCompleteEvent(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+	ctx := context.Background()
+
+	h.store.PutConnection(ctx, &model.Connection{
+		ConnectionID: "conn_abort",
+		TenantID:     "tnt_test",
+		TaskID:       "task_test",
+		RunID:        "run_test",
+		ConnectedAt:  time.Now().UTC(),
+		TTL:          time.Now().Add(2 * time.Hour).Unix(),
+	})
+	h.store.SetAbortRequested(ctx, "task_test", "user requested abort")
+
+	llm := NewMockLLMClient(2)
+	registry := NewRegistry()
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, registry, h.pusher)
+
+	result, err := eng.Execute(ctx, h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusAborted {
+		t.Fatalf("expected ABORTED, got %s", result.Status)
+	}
+
+	events := h.pusher.Events()
+	found := false
+	for _, ev := range events {
+		if ev.Event.Type == model.StreamEventComplete {
+			data, ok := ev.Event.Data.(map[string]interface{})
+			if !ok {
+				t.Fatal("complete event data should be a map")
+			}
+			if data["status"] == "aborted" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected an aborted complete event")
+	}
+}
+
 func TestEngineResume(t *testing.T) {
 	h := setupHarness(t)
 	defer h.cleanup()
@@ -269,6 +316,48 @@ func TestFSExportToolMissingPaths(t *testing.T) {
 	}
 	if result.Error == "" {
 		t.Fatal("expected error for empty paths")
+	}
+}
+
+func TestFSExportToolPrefix(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+	ctx := context.Background()
+
+	if err := h.ws.Write(ctx, "a.txt", []byte("alpha")); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := NewFSToolsWithArtifactsPrefix(h.ws, h.artifacts, "exports/tnt_test/task_test/run_test")
+	var exportTool Tool
+	for _, tool := range tools {
+		if tool.Name() == "fs.export" {
+			exportTool = tool
+			break
+		}
+	}
+	if exportTool == nil {
+		t.Fatal("fs.export tool not found")
+	}
+
+	result, err := exportTool.Execute(ctx, `{"paths":["a.txt"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Error != "" {
+		t.Fatalf("fs.export error: %s", result.Error)
+	}
+
+	var payload struct {
+		S3Key  string `json:"s3_key"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &payload); err != nil {
+		t.Fatalf("invalid fs.export output: %v", err)
+	}
+	if !strings.HasPrefix(payload.S3Key, "exports/tnt_test/task_test/run_test/") {
+		t.Fatalf("expected tenant/task/run prefix in s3_key, got %s", payload.S3Key)
 	}
 }
 

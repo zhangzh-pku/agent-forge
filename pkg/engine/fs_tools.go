@@ -21,6 +21,12 @@ func NewFSTools(ws workspace.Manager) []Tool {
 
 // NewFSToolsWithArtifacts creates file system tools with optional artifact store for fs.export.
 func NewFSToolsWithArtifacts(ws workspace.Manager, artifacts artifactStore) []Tool {
+	return NewFSToolsWithArtifactsPrefix(ws, artifacts, "exports")
+}
+
+// NewFSToolsWithArtifactsPrefix creates file system tools with optional artifact
+// store for fs.export and a configurable artifact key prefix.
+func NewFSToolsWithArtifactsPrefix(ws workspace.Manager, artifacts artifactStore, exportPrefix string) []Tool {
 	tools := []Tool{
 		&fsWriteTool{ws: ws},
 		&fsReadTool{ws: ws},
@@ -29,7 +35,7 @@ func NewFSToolsWithArtifacts(ws workspace.Manager, artifacts artifactStore) []To
 		&fsDeleteTool{ws: ws},
 	}
 	if artifacts != nil {
-		tools = append(tools, &fsExportTool{ws: ws, artifacts: artifacts})
+		tools = append(tools, &fsExportTool{ws: ws, artifacts: artifacts, exportPrefix: strings.Trim(exportPrefix, "/")})
 	}
 	return tools
 }
@@ -183,6 +189,8 @@ func (t *fsDeleteTool) Execute(ctx context.Context, args string) (*ToolResult, e
 type fsExportTool struct {
 	ws        workspace.Manager
 	artifacts artifactStore
+	// exportPrefix scopes generated artifacts (e.g. exports/{tenant}/{task}/{run}).
+	exportPrefix string
 }
 
 func (t *fsExportTool) Name() string        { return "fs.export" }
@@ -229,7 +237,15 @@ func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, e
 		pw.CloseWithError(writeErr)
 	}()
 
-	key := fmt.Sprintf("exports/artifact_%s.tar.gz", randomHex())
+	rnd, err := randomHex()
+	if err != nil {
+		return &ToolResult{Error: fmt.Sprintf("failed to generate artifact id: %v", err)}, nil
+	}
+	prefix := t.exportPrefix
+	if prefix == "" {
+		prefix = "exports"
+	}
+	key := fmt.Sprintf("%s/artifact_%s.tar.gz", prefix, rnd)
 	sha, size, err := t.artifacts.Put(ctx, key, pr)
 	if err != nil {
 		return &ToolResult{Error: fmt.Sprintf("export failed: %v", err)}, nil
@@ -239,12 +255,12 @@ func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, e
 	return &ToolResult{Output: result}, nil
 }
 
-func randomHex() string {
+func randomHex() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", err
 	}
-	return fmt.Sprintf("%x", b)
+	return fmt.Sprintf("%x", b), nil
 }
 
 func isPrintable(data []byte) bool {

@@ -220,6 +220,117 @@ func TestAWSPusherSuccess(t *testing.T) {
 	}
 }
 
+func TestChunkedAWSPusherFlushByBytes(t *testing.T) {
+	var mu sync.Mutex
+	var calls int
+	var payloads [][]byte
+
+	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1, // force immediate flush
+	}, func(_ context.Context, _ string, data []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		payloads = append(payloads, cp)
+		return nil
+	})
+
+	alive, err := pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepStart,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !alive {
+		t.Fatal("expected alive=true")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls == 0 {
+		t.Fatal("expected at least one post call")
+	}
+	if len(payloads[0]) == 0 || payloads[0][len(payloads[0])-1] != '\n' {
+		t.Fatal("expected newline-delimited chunk payload")
+	}
+}
+
+func TestChunkedAWSPusherFlushByTime(t *testing.T) {
+	flushed := make(chan struct{}, 1)
+	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{
+		FlushInterval: 30 * time.Millisecond,
+		FlushBytes:    1024 * 1024,
+	}, func(_ context.Context, _ string, _ []byte) error {
+		select {
+		case flushed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	alive, err := pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepStart,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !alive {
+		t.Fatal("expected alive=true")
+	}
+
+	select {
+	case <-flushed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected time-based flush")
+	}
+}
+
+func TestChunkedAWSPusherGoneConnection(t *testing.T) {
+	var calls int
+	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1, // flush immediately
+	}, func(_ context.Context, _ string, _ []byte) error {
+		calls++
+		return &GoneError{}
+	})
+
+	alive, err := pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepStart,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for gone connection, got %v", err)
+	}
+	if alive {
+		t.Fatal("expected alive=false for gone connection")
+	}
+
+	// After being marked dead, the pusher should short-circuit.
+	alive, err = pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepEnd,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error after dead connection, got %v", err)
+	}
+	if alive {
+		t.Fatal("expected alive=false after dead connection")
+	}
+	if calls != 1 {
+		t.Fatalf("expected one post attempt before dead short-circuit, got %d", calls)
+	}
+}
+
 func TestIsGoneError(t *testing.T) {
 	if IsGoneError(nil) {
 		t.Fatal("nil should not be gone")

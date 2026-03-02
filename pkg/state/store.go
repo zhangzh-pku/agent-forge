@@ -25,6 +25,8 @@ type TaskStore interface {
 	GetTask(ctx context.Context, taskID string) (*model.Task, error)
 	// UpdateTaskStatus atomically updates task status with a condition.
 	UpdateTaskStatus(ctx context.Context, taskID string, from []model.TaskStatus, to model.TaskStatus) error
+	// UpdateTaskStatusForRun atomically updates task status only if active_run_id matches runID.
+	UpdateTaskStatusForRun(ctx context.Context, taskID, runID string, from []model.TaskStatus, to model.TaskStatus) error
 	// SetAbortRequested marks a task for abortion.
 	SetAbortRequested(ctx context.Context, taskID string, reason string) error
 	// ClearAbortRequested resets the abort flag on a task (used during resume).

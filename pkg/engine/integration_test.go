@@ -83,6 +83,7 @@ func TestFullLoop(t *testing.T) {
 	stepsPath := "/tasks/" + createResp.TaskID + "/runs/" + createResp.RunID + "/steps?from=0&limit=200"
 	req = httptest.NewRequest("GET", stepsPath, nil)
 	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
@@ -104,6 +105,84 @@ func TestFullLoop(t *testing.T) {
 	lastStep := stepsResp.Steps[len(stepsResp.Steps)-1]
 	if lastStep["type"] != "final" {
 		t.Fatalf("last step type: expected 'final', got %q", lastStep["type"])
+	}
+}
+
+func TestWorkerSkipsStaleNonActiveRun(t *testing.T) {
+	store := state.NewMemoryStore()
+	artifacts := artstore.NewMemoryStore()
+	q := queue.NewMemoryQueue(10)
+	pusher := stream.NewMockPusher()
+	llm := NewMockLLMClient(1)
+
+	now := time.Now().UTC()
+	taskObj := &model.Task{
+		TaskID:      "task_stale",
+		TenantID:    "tnt_1",
+		UserID:      "user_1",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_new",
+		Prompt:      "stale run should be skipped",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := store.PutTask(context.Background(), taskObj); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRun(context.Background(), &model.Run{
+		TaskID:   "task_stale",
+		RunID:    "run_old",
+		TenantID: "tnt_1",
+		Status:   model.RunStatusQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRun(context.Background(), &model.Run{
+		TaskID:   "task_stale",
+		RunID:    "run_new",
+		TenantID: "tnt_1",
+		Status:   model.RunStatusQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := NewWorker(store, artifacts, q, llm, NewRegistry(), pusher, DefaultEngineConfig())
+	msg := &model.SQSMessage{
+		TenantID:    "tnt_1",
+		TaskID:      "task_stale",
+		RunID:       "run_old",
+		SubmittedAt: now.Unix(),
+		Attempt:     1,
+	}
+	if err := worker.handleMessage(context.Background(), msg); err != nil {
+		t.Fatal(err)
+	}
+
+	runOld, err := store.GetRun(context.Background(), "task_stale", "run_old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runOld.Status != model.RunStatusAborted {
+		t.Fatalf("expected stale run to be ABORTED, got %s", runOld.Status)
+	}
+
+	taskAfter, err := store.GetTask(context.Background(), "task_stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskAfter.ActiveRunID != "run_new" {
+		t.Fatalf("expected active run to stay run_new, got %s", taskAfter.ActiveRunID)
+	}
+	if taskAfter.Status != model.TaskStatusQueued {
+		t.Fatalf("expected task status to remain QUEUED, got %s", taskAfter.Status)
+	}
+
+	steps, err := store.ListSteps(context.Background(), "run_old", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 0 {
+		t.Fatalf("expected no steps for stale run, got %d", len(steps))
 	}
 }
 
@@ -138,6 +217,7 @@ func TestFullLoopWithAbort(t *testing.T) {
 	abortBody, _ := json.Marshal(map[string]string{"reason": "testing abort"})
 	req = httptest.NewRequest("POST", "/tasks/"+createResp.TaskID+"/abort", bytes.NewReader(abortBody))
 	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
