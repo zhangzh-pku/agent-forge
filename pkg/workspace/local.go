@@ -250,12 +250,22 @@ func (m *LocalManager) Snapshot(_ context.Context) (io.ReadCloser, error) {
 			if err != nil {
 				return err
 			}
-			defer f.Close()
 			_, err = io.Copy(tw, f)
-			return err
+			closeErr := f.Close()
+			if err != nil {
+				return err
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			return nil
 		})
-		tw.Close()
-		gw.Close()
+		if closeErr := tw.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if closeErr := gw.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
 		pw.CloseWithError(err)
 	}()
 	return pr, nil
@@ -275,7 +285,7 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("workspace: gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	var totalBytes int64
@@ -329,10 +339,14 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 				return fmt.Errorf("workspace: create file: %w", err)
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				if closeErr := f.Close(); closeErr != nil {
+					return fmt.Errorf("workspace: extract file: %w (close: %v)", err, closeErr)
+				}
 				return fmt.Errorf("workspace: extract file: %w", err)
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				return fmt.Errorf("workspace: close file: %w", err)
+			}
 		default:
 			// Skip symlinks and other types for security.
 			continue

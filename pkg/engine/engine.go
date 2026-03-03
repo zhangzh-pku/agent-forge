@@ -549,7 +549,12 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 		}
 		if !alive {
 			// Connection gone (410) — clean up.
-			e.store.DeleteConnection(ctx, conn.ConnectionID)
+			if err := e.store.DeleteConnection(ctx, conn.ConnectionID); err != nil {
+				e.log.Error("engine: delete stale connection failed", map[string]interface{}{
+					"error":         err.Error(),
+					"connection_id": conn.ConnectionID,
+				})
+			}
 		}
 	}
 }

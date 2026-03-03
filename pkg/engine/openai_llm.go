@@ -116,7 +116,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req *LLMRequest
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	streamReader := io.LimitReader(resp.Body, openAIMaxStreamBytes)
 	scanner := bufio.NewScanner(streamReader)
@@ -329,7 +329,9 @@ func (c *OpenAICompatibleClient) doJSONRequest(ctx context.Context, bodyBytes []
 		}
 
 		respBody, err = io.ReadAll(io.LimitReader(resp.Body, openAIMaxResponseBytes+1))
-		resp.Body.Close()
+		if closeErr := resp.Body.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("engine: openai client: close response body: %w", closeErr)
+		}
 		if err != nil {
 			lastErr = fmt.Errorf("engine: openai client: read response: %w", err)
 			if attempt < openAIMaxAttempts && ctx.Err() == nil {
@@ -379,7 +381,7 @@ func (c *OpenAICompatibleClient) doStreamRequest(ctx context.Context, bodyBytes 
 
 		// Drain a bounded error body for diagnostics before retry/return.
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIMaxResponseBytes))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		lastErr = parseOpenAIError(resp.StatusCode, errBody)
 		if attempt < openAIMaxAttempts && shouldRetryStatus(resp.StatusCode) && ctx.Err() == nil {
 			sleepWithBackoff(ctx, attempt)

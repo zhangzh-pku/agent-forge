@@ -263,7 +263,7 @@ func TestResumeTaskWithModelConfig(t *testing.T) {
 	json.NewDecoder(rr.Body).Decode(&resumeResp)
 
 	// Verify the new run has the model config override.
-	run, err := store.GetRun(nil, createResp["task_id"], resumeResp["run_id"])
+	run, err := store.GetRun(context.Background(), createResp["task_id"], resumeResp["run_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestResumeTaskClearsAbortFlag(t *testing.T) {
 	})
 
 	// Verify abort is set.
-	taskObj, _ := store.GetTask(nil, createResp["task_id"])
+	taskObj, _ := store.GetTask(context.Background(), createResp["task_id"])
 	if !taskObj.AbortRequested {
 		t.Fatal("expected abort_requested=true")
 	}
@@ -305,7 +305,7 @@ func TestResumeTaskClearsAbortFlag(t *testing.T) {
 		"from_step_index": 0,
 	})
 
-	taskObj, _ = store.GetTask(nil, createResp["task_id"])
+	taskObj, _ = store.GetTask(context.Background(), createResp["task_id"])
 	if taskObj.AbortRequested {
 		t.Fatal("expected abort_requested=false after resume")
 	}
@@ -329,7 +329,7 @@ func TestCreateTaskWithModelConfig(t *testing.T) {
 	var createResp map[string]string
 	json.NewDecoder(rr.Body).Decode(&createResp)
 
-	taskObj, err := store.GetTask(nil, createResp["task_id"])
+	taskObj, err := store.GetTask(context.Background(), createResp["task_id"])
 	if err != nil {
 		t.Fatal(err)
 	}

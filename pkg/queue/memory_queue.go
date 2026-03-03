@@ -260,10 +260,24 @@ func (q *MemoryQueue) ingressLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-q.ch:
-			if msg == nil {
-				continue
+			q.mu.Lock()
+			if msg != nil {
+				q.addPendingLocked(msg)
 			}
-			q.addPending(msg)
+			// Drain buffered messages as one batch so workers observe a stable
+			// pending set and fairness is less sensitive to goroutine timing.
+			for {
+				select {
+				case next := <-q.ch:
+					if next != nil {
+						q.addPendingLocked(next)
+					}
+				default:
+					q.mu.Unlock()
+					goto drained
+				}
+			}
+		drained:
 		}
 	}
 }
@@ -279,9 +293,7 @@ func (q *MemoryQueue) workerLoop(ctx context.Context, handler MessageHandler) {
 	}
 }
 
-func (q *MemoryQueue) addPending(msg *model.SQSMessage) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (q *MemoryQueue) addPendingLocked(msg *model.SQSMessage) {
 	tenantID := normalizeTenant(msg.TenantID)
 	if _, ok := q.pending[tenantID]; !ok {
 		q.tenantOrder = append(q.tenantOrder, tenantID)

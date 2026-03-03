@@ -58,7 +58,9 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, `{"status":"ok"}`)
+		if _, err := fmt.Fprintln(w, `{"status":"ok"}`); err != nil {
+			log.Printf("health write failed: %v", err)
+		}
 	})
 
 	srv := &http.Server{

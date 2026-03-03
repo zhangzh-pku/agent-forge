@@ -20,7 +20,7 @@ func SnapshotWorkspace(ctx context.Context, ws workspace.Manager, store artifact
 	if err != nil {
 		return nil, fmt.Errorf("snapshot workspace: %w", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	key := WorkspaceS3Key(tenantID, taskID, runID, stepIndex)
 	sha, size, err := store.Put(ctx, key, rc)
@@ -41,7 +41,7 @@ func RestoreWorkspace(ctx context.Context, ws workspace.Manager, store artifact.
 	if err != nil {
 		return fmt.Errorf("get workspace snapshot: %w", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	if err := ws.Restore(ctx, rc); err != nil {
 		return fmt.Errorf("restore workspace: %w", err)

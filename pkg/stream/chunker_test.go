@@ -155,7 +155,7 @@ func TestMockPusher(t *testing.T) {
 
 	event := &model.StreamEvent{TaskID: "t1", Type: model.StreamEventStepStart}
 
-	alive, err := p.Push(nil, "conn_1", event)
+	alive, err := p.Push(context.Background(), "conn_1", event)
 	if err != nil || !alive {
 		t.Fatal("expected alive push")
 	}
@@ -166,7 +166,7 @@ func TestMockPusher(t *testing.T) {
 
 	// Test gone connection.
 	p.GoneConnections["conn_2"] = true
-	alive, err = p.Push(nil, "conn_2", event)
+	alive, err = p.Push(context.Background(), "conn_2", event)
 	if err != nil {
 		t.Fatal(err)
 	}

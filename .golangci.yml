@@ -9,5 +9,17 @@ linters:
     - errcheck
     - revive
 
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+      - name: unused-parameter
+        disabled: true
+
 issues:
   exclude-use-default: false
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

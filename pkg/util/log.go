@@ -59,7 +59,12 @@ func (l *Logger) log(level, msg string, extra ...map[string]interface{}) {
 			entry[k] = v
 		}
 	}
-	data, _ := json.Marshal(entry)
-	l.out.Write(data)
-	l.out.Write([]byte("\n"))
+	data, err := json.Marshal(entry)
+	if err != nil {
+		data = []byte(`{"level":"error","msg":"logger marshal failed"}`)
+	}
+	if _, err := l.out.Write(data); err != nil {
+		return
+	}
+	_, _ = l.out.Write([]byte("\n"))
 }

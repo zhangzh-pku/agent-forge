@@ -298,8 +298,12 @@ func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, e
 				break
 			}
 		}
-		tw.Close()
-		gw.Close()
+		if closeErr := tw.Close(); writeErr == nil && closeErr != nil {
+			writeErr = closeErr
+		}
+		if closeErr := gw.Close(); writeErr == nil && closeErr != nil {
+			writeErr = closeErr
+		}
 		pw.CloseWithError(writeErr)
 	}()
 

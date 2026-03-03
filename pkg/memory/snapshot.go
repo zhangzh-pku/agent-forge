@@ -63,13 +63,13 @@ func (s *Snapshotter) Load(ctx context.Context, ref *model.ArtifactRef) (*model.
 	if err != nil {
 		return nil, fmt.Errorf("memory: get: %w", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	gr, err := gzip.NewReader(rc)
 	if err != nil {
 		return nil, fmt.Errorf("memory: gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	data, err := io.ReadAll(gr)
 	if err != nil {
