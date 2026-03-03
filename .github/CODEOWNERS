@@ -1,0 +1,5 @@
+# Default owner for all files.
+* @zhangzh-pku
+
+# Infrastructure changes require explicit owner review.
+/deploy/terraform/ @zhangzh-pku

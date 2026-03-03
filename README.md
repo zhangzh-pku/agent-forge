@@ -109,6 +109,10 @@ Key docs:
 - `docs/configuration.md` - full environment variable reference
 - `docs/coding-standards.md` - coding and review conventions
 - `docs/operations-runbook.md` - incident and partial-failure handling
+- `CONTRIBUTING.md` - pull request process and required checks
+- `SECURITY.md` - vulnerability reporting policy
+- `CODE_OF_CONDUCT.md` - community behavior expectations
+- `SUPPORT.md` - support channels and required context
 
 ## Quick Start
 
@@ -280,6 +284,8 @@ any external service.
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `AGENTFORGE_LLM_MODEL` | `gpt-4o-mini` | Default model when request omits `model_config.model_id` |
+| `AGENTFORGE_LLM_ROUTING_DEFAULT_MODE` | `latency-first` | Router default mode: `latency-first`, `quality-first`, or `cost-cap` |
+| `AGENTFORGE_LLM_FALLBACK_PROVIDERS` | _(empty)_ | Comma-separated provider fallback chain (for example `openai,mock`) |
 | `AGENTFORGE_ALLOWED_MODEL_IDS` | _(built-in set)_ | Comma-separated model allowlist for `model_config` request validation |
 | `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | HTTP timeout for LLM requests |
 

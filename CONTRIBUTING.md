@@ -95,6 +95,23 @@ go test -short ./...
 
 7. A maintainer will review your PR. Please respond to feedback promptly.
 
+### PR Checklist (Required)
+
+Before requesting review, confirm:
+
+- [ ] `make ci` passed for Go/runtime changes
+- [ ] Tests were added or updated for behavior changes
+- [ ] Security impact was reviewed (authz/data exposure/dependencies)
+- [ ] Docs/config were updated when interfaces or behavior changed
+
+### Change Type -> Required Commands
+
+| Change type | Required local checks |
+|---|---|
+| Go runtime/API/engine changes | `make ci` |
+| Terraform (`deploy/terraform/**`) | `terraform -chdir=deploy/terraform fmt -check -recursive` and `terraform -chdir=deploy/terraform validate` |
+| Docs-only changes | Verify referenced commands/paths exist in current repo |
+
 ## Terraform Changes
 
 If your change modifies infrastructure in `deploy/terraform/`:
