@@ -174,6 +174,10 @@ func initStore(ctx context.Context) (state.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	eventRetention, err := appcfg.EventRetentionFromEnv()
+	if err != nil {
+		return nil, err
+	}
 
 	return state.NewDynamoStore(dynamodb.NewFromConfig(awsCfg), state.DynamoStoreConfig{
 		TasksTable:       stateCfg.TasksTable,
@@ -181,5 +185,6 @@ func initStore(ctx context.Context) (state.Store, error) {
 		StepsTable:       stateCfg.StepsTable,
 		ConnectionsTable: stateCfg.ConnectionsTable,
 		ConnectionIndex:  stateCfg.ConnectionIndex,
+		EventRetention:   eventRetention,
 	})
 }

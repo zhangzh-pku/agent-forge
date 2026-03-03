@@ -17,6 +17,7 @@ const (
 	DefaultRecoveryLimit          int32 = 200
 	DefaultArtifactPresignExpires       = 15 * time.Minute
 	DefaultRecoveryStaleFor             = 10 * time.Minute
+	DefaultEventRetention               = 24 * time.Hour
 )
 
 // RuntimeMode controls which backend implementations the app should use.
@@ -61,6 +62,7 @@ type AWSRuntimeConfig struct {
 	ArtifactsBucket             string
 	ArtifactSSEKMSKeyARN        string
 	WebSocketEndpoint           string
+	EventRetention              time.Duration
 	ArtifactPresignExpires      time.Duration
 	SQSWaitTimeSeconds          int32
 	SQSVisibilityTimeoutSeconds int32
@@ -121,6 +123,10 @@ func LoadAWSRuntimeConfigFromEnv() (*AWSRuntimeConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	eventRetention, err := EventRetentionFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	presign, err := Duration("ARTIFACT_PRESIGN_EXPIRES", DefaultArtifactPresignExpires)
 	if err != nil {
 		return nil, err
@@ -144,11 +150,25 @@ func LoadAWSRuntimeConfigFromEnv() (*AWSRuntimeConfig, error) {
 		ArtifactsBucket:             artifactsBucket,
 		ArtifactSSEKMSKeyARN:        String("ARTIFACT_SSE_KMS_KEY_ARN", ""),
 		WebSocketEndpoint:           NormalizeWebSocketEndpoint(String("WEBSOCKET_ENDPOINT", "")),
+		EventRetention:              eventRetention,
 		ArtifactPresignExpires:      presign,
 		SQSWaitTimeSeconds:          waitTime,
 		SQSVisibilityTimeoutSeconds: visibility,
 		SQSMaxMessages:              maxMessages,
 	}, nil
+}
+
+// EventRetentionFromEnv loads AGENTFORGE_EVENT_RETENTION and validates bounds.
+// A value of 0 disables retention filtering/ttl hints.
+func EventRetentionFromEnv() (time.Duration, error) {
+	retention, err := Duration("AGENTFORGE_EVENT_RETENTION", DefaultEventRetention)
+	if err != nil {
+		return 0, err
+	}
+	if retention < 0 {
+		return 0, fmt.Errorf("invalid AGENTFORGE_EVENT_RETENTION: must be >= 0")
+	}
+	return retention, nil
 }
 
 // LoadRecoveryRuntimeConfigFromEnv loads operational recovery settings.

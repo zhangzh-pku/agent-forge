@@ -46,6 +46,7 @@ func TestLoadAWSRuntimeConfigFromEnv(t *testing.T) {
 	t.Setenv("ARTIFACTS_BUCKET", "agentforge-artifacts")
 	t.Setenv("ARTIFACT_SSE_KMS_KEY_ARN", "arn:aws:kms:us-east-1:123456789012:key/abcd-1234")
 	t.Setenv("WEBSOCKET_ENDPOINT", "wss://abc.execute-api.us-east-1.amazonaws.com/prod")
+	t.Setenv("AGENTFORGE_EVENT_RETENTION", "36h")
 	t.Setenv("ARTIFACT_PRESIGN_EXPIRES", "30m")
 	t.Setenv("SQS_WAIT_TIME_SECONDS", "15")
 	t.Setenv("SQS_VISIBILITY_TIMEOUT_SECONDS", "600")
@@ -67,8 +68,40 @@ func TestLoadAWSRuntimeConfigFromEnv(t *testing.T) {
 	if cfg.ArtifactPresignExpires != 30*time.Minute {
 		t.Fatalf("unexpected presign expires: %s", cfg.ArtifactPresignExpires)
 	}
+	if cfg.EventRetention != 36*time.Hour {
+		t.Fatalf("unexpected event retention: %s", cfg.EventRetention)
+	}
 	if cfg.SQSWaitTimeSeconds != 15 || cfg.SQSVisibilityTimeoutSeconds != 600 || cfg.SQSMaxMessages != 5 {
 		t.Fatalf("unexpected sqs config: %+v", cfg)
+	}
+}
+
+func TestEventRetentionFromEnvRejectsNegative(t *testing.T) {
+	t.Setenv("AGENTFORGE_EVENT_RETENTION", "-1m")
+	if _, err := EventRetentionFromEnv(); err == nil {
+		t.Fatal("expected error for negative AGENTFORGE_EVENT_RETENTION")
+	}
+}
+
+func TestEventRetentionFromEnvAllowsZero(t *testing.T) {
+	t.Setenv("AGENTFORGE_EVENT_RETENTION", "0")
+	retention, err := EventRetentionFromEnv()
+	if err != nil {
+		t.Fatalf("EventRetentionFromEnv error: %v", err)
+	}
+	if retention != 0 {
+		t.Fatalf("expected zero retention, got %s", retention)
+	}
+}
+
+func TestEventRetentionFromEnvDefault(t *testing.T) {
+	t.Setenv("AGENTFORGE_EVENT_RETENTION", "")
+	retention, err := EventRetentionFromEnv()
+	if err != nil {
+		t.Fatalf("EventRetentionFromEnv error: %v", err)
+	}
+	if retention != DefaultEventRetention {
+		t.Fatalf("expected default retention %s, got %s", DefaultEventRetention, retention)
 	}
 }
 

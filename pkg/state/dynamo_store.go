@@ -19,6 +19,7 @@ import (
 
 const (
 	defaultConnectionTaskIndex = "task-index"
+	eventTTLAttribute          = "ttl"
 	taskMetaSK                 = "META"
 	connMetaSK                 = "META"
 	maxBatchWriteSize          = 25
@@ -31,6 +32,7 @@ type DynamoStoreConfig struct {
 	StepsTable       string
 	ConnectionsTable string
 	ConnectionIndex  string
+	EventRetention   time.Duration
 }
 
 // DynamoStore is a production Store backed by DynamoDB.
@@ -41,6 +43,7 @@ type DynamoStore struct {
 	stepsTable       string
 	connectionsTable string
 	connectionIndex  string
+	eventRetention   time.Duration
 }
 
 // NewDynamoStore creates a new DynamoDB-backed state store.
@@ -63,6 +66,9 @@ func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStor
 	if strings.TrimSpace(cfg.ConnectionIndex) == "" {
 		cfg.ConnectionIndex = defaultConnectionTaskIndex
 	}
+	if cfg.EventRetention < 0 {
+		return nil, fmt.Errorf("state: event retention must be >= 0")
+	}
 
 	return &DynamoStore{
 		client:           client,
@@ -71,6 +77,7 @@ func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStor
 		stepsTable:       strings.TrimSpace(cfg.StepsTable),
 		connectionsTable: strings.TrimSpace(cfg.ConnectionsTable),
 		connectionIndex:  strings.TrimSpace(cfg.ConnectionIndex),
+		eventRetention:   cfg.EventRetention,
 	}, nil
 }
 
@@ -938,6 +945,10 @@ func (s *DynamoStore) PutEvent(ctx context.Context, event *model.StreamEvent) er
 	item["pk"] = avString(stepPK(cp.RunID))
 	item["sk"] = avString(eventSK(cp.Seq))
 	item["entity"] = avString("event")
+	if s.eventRetention > 0 {
+		expiresAt := cp.TS + int64(s.eventRetention/time.Second)
+		item[eventTTLAttribute] = &dbtypes.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)}
+	}
 
 	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.stepsTable),
@@ -968,6 +979,10 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 	}
 
 	var out []*model.StreamEvent
+	var retentionCutoff int64
+	if s.eventRetention > 0 {
+		retentionCutoff = time.Now().Add(-s.eventRetention).Unix()
+	}
 	var startKey map[string]dbtypes.AttributeValue
 	for {
 		queryLimit := int32(limit - len(out))
@@ -999,6 +1014,9 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 				continue
 			}
 			if taskID != "" && ev.TaskID != taskID {
+				continue
+			}
+			if retentionCutoff > 0 && ev.TS < retentionCutoff {
 				continue
 			}
 			if fromTS > 0 && ev.TS < fromTS {

@@ -57,6 +57,7 @@ Required when `AGENTFORGE_RUNTIME=aws` for `cmd/taskapi`, `cmd/worker`, and `cmd
 | `ARTIFACT_SSE_KMS_KEY_ARN` | No | Optional CMK ARN used by `S3Store.Put` SSE-KMS (`aws:kms`). Empty means use bucket default key. |
 | `CONNECTIONS_TASK_INDEX` | No | Connections task GSI name. Default: `task-index`. |
 | `WEBSOCKET_ENDPOINT` | No | API Gateway management endpoint (`https://...`) for pushing stream events. |
+| `AGENTFORGE_EVENT_RETENTION` | No | Event retention window for replay in aws mode. Default: `24h`; set `0` to disable retention filtering and event TTL hints. |
 | `ARTIFACT_PRESIGN_EXPIRES` | No | Presigned URL TTL. Default: `15m`. |
 | `SQS_WAIT_TIME_SECONDS` | No | ReceiveMessage long-poll time. Default: `20`. |
 | `SQS_VISIBILITY_TIMEOUT_SECONDS` | No | Visibility timeout. Default: `300`. |
@@ -71,6 +72,7 @@ Required when `AGENTFORGE_RUNTIME=aws` for `cmd/taskapi`, `cmd/worker`, and `cmd
 - `STEPS_TABLE`
 - `CONNECTIONS_TABLE`
 - optional `CONNECTIONS_TASK_INDEX`
+- optional `AGENTFORGE_EVENT_RETENTION`
 
 ## Local Development
 

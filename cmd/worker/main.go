@@ -85,6 +85,7 @@ func initRuntime(ctx context.Context) (state.Store, artstore.Store, queue.Queue,
 		StepsTable:       backendCfg.State.StepsTable,
 		ConnectionsTable: backendCfg.State.ConnectionsTable,
 		ConnectionIndex:  backendCfg.State.ConnectionIndex,
+		EventRetention:   backendCfg.EventRetention,
 	})
 	if err != nil {
 		return nil, nil, nil, nil, "aws", err

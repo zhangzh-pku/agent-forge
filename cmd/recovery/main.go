@@ -80,6 +80,7 @@ func initRuntime(ctx context.Context) (state.Store, queue.Queue, string, error) 
 		StepsTable:       backendCfg.State.StepsTable,
 		ConnectionsTable: backendCfg.State.ConnectionsTable,
 		ConnectionIndex:  backendCfg.State.ConnectionIndex,
+		EventRetention:   backendCfg.EventRetention,
 	})
 	if err != nil {
 		return nil, nil, "aws", err

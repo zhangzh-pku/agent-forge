@@ -187,6 +187,13 @@ resource "aws_dynamodb_table" "steps" {
     kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : null
   }
 
+  # Enable TTL for stream events. Only items with "ttl" are expired;
+  # step records without that attribute remain intact.
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
   tags = {
     Name = "agentforge-steps"
   }
