@@ -810,6 +810,111 @@ func TestEngineStreamPushTenantIsolation(t *testing.T) {
 	}
 }
 
+func TestSanitizeEventTextRedactsSecretsAndTruncates(t *testing.T) {
+	rawJSON := `{"api_key":"sk-live-123","nested":{"token":"tok_secret_value_12345"},"ok":"value"}`
+	sanitized := sanitizeEventText(rawJSON)
+	if !strings.Contains(sanitized, eventTextRedacted) {
+		t.Fatalf("expected redacted marker in sanitized output: %s", sanitized)
+	}
+	if strings.Contains(sanitized, "sk-live-123") || strings.Contains(sanitized, "tok_secret_value_12345") {
+		t.Fatalf("sensitive values should be redacted: %s", sanitized)
+	}
+
+	longText := "Authorization: Bearer very-secret-token " + strings.Repeat("x", maxSanitizedEventTextRunes+64)
+	sanitizedLong := sanitizeEventText(longText)
+	if strings.Contains(sanitizedLong, "very-secret-token") {
+		t.Fatalf("bearer token should be redacted: %s", sanitizedLong)
+	}
+	if !strings.Contains(sanitizedLong, eventTextTruncatedSuffix) {
+		t.Fatalf("expected truncation suffix, got: %s", sanitizedLong)
+	}
+	if got := len([]rune(sanitizedLong)); got > maxSanitizedEventTextRunes {
+		t.Fatalf("expected <= %d runes, got %d", maxSanitizedEventTextRunes, got)
+	}
+}
+
+func TestEnginePushEventSanitizesSensitivePayloads(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	ctx := context.Background()
+	if err := h.store.PutConnection(ctx, &model.Connection{
+		ConnectionID: "conn_sensitive",
+		TenantID:     h.task.TenantID,
+		TaskID:       h.task.TaskID,
+		RunID:        h.run.RunID,
+		ConnectedAt:  time.Now().UTC(),
+		TTL:          time.Now().Add(2 * time.Hour).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, nil, nil, h.pusher)
+	var seq int64
+	eng.pushEvent(ctx, h.task.TenantID, h.task.TaskID, h.run.RunID, &seq, model.StreamEventToolCall, map[string]interface{}{
+		"tool": "fs.write",
+		"args": `{"api_key":"sk-live-xyz","path":"a.txt"}`,
+	})
+	eng.pushEvent(ctx, h.task.TenantID, h.task.TaskID, h.run.RunID, &seq, model.StreamEventToolResult, map[string]interface{}{
+		"tool":   "fs.write",
+		"output": "Authorization: Bearer super-secret-token",
+	})
+	eng.pushEvent(ctx, h.task.TenantID, h.task.TaskID, h.run.RunID, &seq, model.StreamEventComplete, map[string]interface{}{
+		"final_answer": "token=final_secret " + strings.Repeat("x", maxSanitizedEventTextRunes+32),
+	})
+
+	pushed := h.pusher.Events()
+	if len(pushed) != 3 {
+		t.Fatalf("expected 3 pushed events, got %d", len(pushed))
+	}
+
+	toolCallData, ok := pushed[0].Event.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("tool_call data should be a map")
+	}
+	args, _ := toolCallData["args"].(string)
+	if strings.Contains(args, "sk-live-xyz") || !strings.Contains(args, eventTextRedacted) {
+		t.Fatalf("tool_call args not sanitized: %s", args)
+	}
+
+	toolResultData, ok := pushed[1].Event.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("tool_result data should be a map")
+	}
+	output, _ := toolResultData["output"].(string)
+	if strings.Contains(output, "super-secret-token") || !strings.Contains(output, eventTextRedacted) {
+		t.Fatalf("tool_result output not sanitized: %s", output)
+	}
+
+	completeData, ok := pushed[2].Event.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("complete data should be a map")
+	}
+	finalAnswer, _ := completeData["final_answer"].(string)
+	if strings.Contains(finalAnswer, "final_secret") {
+		t.Fatalf("final answer not sanitized: %s", finalAnswer)
+	}
+	if !strings.Contains(finalAnswer, eventTextTruncatedSuffix) {
+		t.Fatalf("expected truncated final answer, got: %s", finalAnswer)
+	}
+
+	stored, err := h.store.ReplayEvents(ctx, h.task.TaskID, h.run.RunID, 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 3 {
+		t.Fatalf("expected 3 stored events, got %d", len(stored))
+	}
+	storedToolCall, ok := stored[0].Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("stored tool_call data should be a map")
+	}
+	storedArgs, _ := storedToolCall["args"].(string)
+	if strings.Contains(storedArgs, "sk-live-xyz") || !strings.Contains(storedArgs, eventTextRedacted) {
+		t.Fatalf("stored tool_call args not sanitized: %s", storedArgs)
+	}
+}
+
 // unknownToolLLM returns a call to an unknown tool on first call, then a final answer.
 type unknownToolLLM struct {
 	calls int

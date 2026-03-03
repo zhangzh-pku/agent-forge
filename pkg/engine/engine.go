@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +23,17 @@ import (
 type Config struct {
 	MaxSteps int // Maximum steps per run (safety limit). Default 50.
 }
+
+const (
+	maxSanitizedEventTextRunes = 2048
+	eventTextRedacted          = "[REDACTED]"
+	eventTextTruncatedSuffix   = "...[truncated]"
+)
+
+var (
+	bearerTokenPattern = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
+	plainSecretPattern = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization)\b(\s*[:=]\s*)([^\s,;]+)`)
+)
 
 // DefaultEngineConfig returns sensible defaults.
 func DefaultEngineConfig() Config {
@@ -528,7 +541,7 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 		Seq:    seq,
 		TS:     time.Now().Unix(),
 		Type:   eventType,
-		Data:   data,
+		Data:   sanitizeEventData(eventType, data),
 	}
 	if err := e.store.PutEvent(ctx, event); err != nil {
 		e.log.Error("engine: persist stream event failed", map[string]interface{}{"error": err.Error(), "type": string(eventType)})
@@ -557,4 +570,104 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 			}
 		}
 	}
+}
+
+func sanitizeEventData(eventType model.StreamEventType, data interface{}) interface{} {
+	fields, ok := data.(map[string]interface{})
+	if !ok || len(fields) == 0 {
+		return data
+	}
+	sanitized := make(map[string]interface{}, len(fields))
+	for k, v := range fields {
+		sanitized[k] = v
+	}
+	switch eventType {
+	case model.StreamEventToolCall:
+		if args, ok := sanitized["args"].(string); ok {
+			sanitized["args"] = sanitizeEventText(args)
+		}
+	case model.StreamEventToolResult:
+		if output, ok := sanitized["output"].(string); ok {
+			sanitized["output"] = sanitizeEventText(output)
+		}
+	case model.StreamEventComplete:
+		if finalAnswer, ok := sanitized["final_answer"].(string); ok {
+			sanitized["final_answer"] = sanitizeEventText(finalAnswer)
+		}
+	}
+	return sanitized
+}
+
+func sanitizeEventText(raw string) string {
+	out := raw
+	if redactedJSON, ok := redactJSONSecrets(out); ok {
+		out = redactedJSON
+	}
+	out = bearerTokenPattern.ReplaceAllString(out, "Bearer "+eventTextRedacted)
+	out = plainSecretPattern.ReplaceAllString(out, "$1$2"+eventTextRedacted)
+	return truncateEventText(out, maxSanitizedEventTextRunes)
+}
+
+func redactJSONSecrets(raw string) (string, bool) {
+	if !json.Valid([]byte(raw)) {
+		return "", false
+	}
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return "", false
+	}
+	redacted := redactJSONValue(decoded)
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+func redactJSONValue(v interface{}) interface{} {
+	switch typed := v.(type) {
+	case map[string]interface{}:
+		for key, value := range typed {
+			if isSensitiveKey(key) {
+				typed[key] = eventTextRedacted
+				continue
+			}
+			typed[key] = redactJSONValue(value)
+		}
+		return typed
+	case []interface{}:
+		for i := range typed {
+			typed[i] = redactJSONValue(typed[i])
+		}
+		return typed
+	default:
+		return v
+	}
+}
+
+func isSensitiveKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	k = strings.ReplaceAll(k, "_", "")
+	k = strings.ReplaceAll(k, "-", "")
+	switch k {
+	case "apikey", "accesstoken", "refreshtoken", "token", "secret", "password", "authorization", "authtoken", "clientsecret":
+		return true
+	default:
+		return false
+	}
+}
+
+func truncateEventText(raw string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(raw)
+	if len(runes) <= maxRunes {
+		return raw
+	}
+	suffixRunes := []rune(eventTextTruncatedSuffix)
+	if len(suffixRunes) >= maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-len(suffixRunes)]) + eventTextTruncatedSuffix
 }
