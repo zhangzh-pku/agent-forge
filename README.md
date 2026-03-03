@@ -130,6 +130,16 @@ In local mode the server starts with an **embedded worker** that shares in-memor
 stores. Tasks submitted via the API are automatically processed — no separate
 worker process needed.
 
+By default, AgentForge uses a deterministic mock LLM. To run against an OpenAI-
+compatible API instead:
+
+```bash
+AGENTFORGE_LLM_PROVIDER=openai \
+OPENAI_API_KEY=sk-... \
+AGENTFORGE_LLM_MODEL=gpt-4o-mini \
+go run cmd/taskapi/main.go
+```
+
 ### Create a task
 
 ```bash
@@ -164,7 +174,7 @@ stores. All external dependencies are replaced with in-memory implementations:
 | S3 | `artifact.NewMemoryStore()` |
 | SQS | `queue.NewMemoryQueue(1000)` |
 | WebSocket push | `stream.NewMockPusher()` |
-| LLM | `engine.NewMockLLMClient(3)` -- returns canned responses for 3 steps |
+| LLM (default) | `engine.NewMockLLMClient(...)` -- returns canned responses |
 
 The standalone worker can also be run separately if needed:
 
@@ -175,6 +185,22 @@ go run cmd/worker/main.go
 The mock LLM client simulates a three-step tool-use conversation and then returns
 a final answer, which is useful for end-to-end testing of the full pipeline without
 any external service.
+
+### LLM Provider Configuration
+
+`cmd/taskapi` and `cmd/worker` read LLM settings from environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTFORGE_LLM_PROVIDER` | `mock` | `mock` or `openai` |
+| `AGENTFORGE_LLM_MOCK_STEPS` | `3` | Number of mock tool-call steps before final answer |
+| `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai` |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
+| `AGENTFORGE_LLM_MODEL` | `gpt-4o-mini` | Default model when request omits `model_config.model_id` |
+| `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | HTTP timeout for LLM requests |
+
+When a task includes `model_config.model_id`, that value overrides
+`AGENTFORGE_LLM_MODEL` for the run.
 
 ## AWS Deployment Overview
 

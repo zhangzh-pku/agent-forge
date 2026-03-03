@@ -20,7 +20,10 @@ func main() {
 	artifacts := artstore.NewMemoryStore()
 	q := queue.NewMemoryQueue(1000)
 	pusher := stream.NewMockPusher()
-	llm := engine.NewMockLLMClient(3)
+	llm, err := engine.NewLLMClientFromEnv()
+	if err != nil {
+		log.Fatalf("failed to initialize LLM client: %v", err)
+	}
 
 	registry := engine.NewRegistry()
 

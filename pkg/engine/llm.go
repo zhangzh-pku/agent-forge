@@ -11,6 +11,7 @@ import (
 type LLMRequest struct {
 	Messages    []model.MemoryMessage `json:"messages"`
 	ModelConfig *model.ModelConfig    `json:"model_config,omitempty"`
+	Tools       []ToolSpec            `json:"tools,omitempty"`
 }
 
 // LLMResponse is the output of an LLM call.
@@ -25,6 +26,12 @@ type LLMResponse struct {
 type ToolCall struct {
 	Name string `json:"name"`
 	Args string `json:"args"` // JSON-encoded arguments
+}
+
+// ToolSpec describes an available tool for the LLM.
+type ToolSpec struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // LLMClient abstracts the language model backend.

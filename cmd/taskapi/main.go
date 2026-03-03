@@ -59,7 +59,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Start embedded worker (shares stores with the API for local dev).
-	llm := engine.NewMockLLMClient(3)
+	llm, err := engine.NewLLMClientFromEnv()
+	if err != nil {
+		log.Fatalf("failed to initialize LLM client: %v", err)
+	}
 	registry := engine.NewRegistry()
 	worker := engine.NewWorker(
 		store, artifacts, q,

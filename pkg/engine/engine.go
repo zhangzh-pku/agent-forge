@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -194,6 +195,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		llmResp, err := e.llm.Chat(ctx, &LLMRequest{
 			Messages:    mem.Messages,
 			ModelConfig: run.ModelConfig,
+			Tools:       collectToolSpecs(e.tools),
 		})
 		if err != nil {
 			e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, err)
@@ -375,6 +377,32 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		LastStep:     startStep + e.cfg.MaxSteps - 1,
 		ErrorMessage: "max steps reached",
 	}, nil
+}
+
+func collectToolSpecs(reg ToolRegistry) []ToolSpec {
+	if reg == nil {
+		return nil
+	}
+	names := reg.List()
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	specs := make([]ToolSpec, 0, len(names))
+	for _, name := range names {
+		t := reg.Get(name)
+		if t == nil {
+			continue
+		}
+		specs = append(specs, ToolSpec{
+			Name:        t.Name(),
+			Description: t.Description(),
+		})
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	return specs
 }
 
 func (e *Engine) writeErrorStep(ctx context.Context, runID string, stepIdx int, start time.Time, stepErr error) {
