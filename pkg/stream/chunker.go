@@ -113,6 +113,9 @@ func (c *Chunker) drainLocked() {
 		return
 	}
 	c.mu.Lock()
+	// Clear sticky error after a successful flush so transient failures do not
+	// poison subsequent pushes forever.
+	c.lastErr = nil
 }
 
 // LastError returns the last flush error, if any.

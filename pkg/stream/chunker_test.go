@@ -150,6 +150,48 @@ func TestChunkerFlushError(t *testing.T) {
 	c.Stop()
 }
 
+func TestChunkerClearsLastErrorAfterSuccessfulFlush(t *testing.T) {
+	cfg := ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1, // force immediate flush on each write
+	}
+
+	flushErr := fmt.Errorf("push failed once")
+	flushCalls := 0
+	c := NewChunker(cfg, func(_ []byte) error {
+		flushCalls++
+		if flushCalls == 1 {
+			return flushErr
+		}
+		return nil
+	})
+
+	if err := c.Write(&model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventTokenChunk,
+		Data:   map[string]string{"text": "first"},
+	}); err != nil {
+		t.Fatalf("first write failed: %v", err)
+	}
+	if err := c.LastError(); err == nil {
+		t.Fatal("expected non-nil LastError after first flush failure")
+	}
+
+	if err := c.Write(&model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventTokenChunk,
+		Data:   map[string]string{"text": "second"},
+	}); err != nil {
+		t.Fatalf("second write failed: %v", err)
+	}
+	if err := c.LastError(); err != nil {
+		t.Fatalf("expected LastError cleared after successful flush, got %v", err)
+	}
+	c.Stop()
+}
+
 func TestMockPusher(t *testing.T) {
 	p := NewMockPusher()
 
@@ -337,6 +379,44 @@ func TestChunkedAWSPusherGoneConnection(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("expected one post attempt before dead short-circuit, got %d", calls)
+	}
+}
+
+func TestChunkedAWSPusherTransientErrorRecovers(t *testing.T) {
+	var calls int
+	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1, // flush immediately
+	}, func(_ context.Context, _ string, _ []byte) error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("temporary network failure")
+		}
+		return nil
+	})
+
+	alive, err := pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepStart,
+	})
+	if err == nil {
+		t.Fatal("expected transient error on first push")
+	}
+	if !alive {
+		t.Fatal("expected alive=true on transient error")
+	}
+
+	alive, err = pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepEnd,
+	})
+	if err != nil {
+		t.Fatalf("expected recovery after transient error, got %v", err)
+	}
+	if !alive {
+		t.Fatal("expected alive=true after recovery")
 	}
 }
 
