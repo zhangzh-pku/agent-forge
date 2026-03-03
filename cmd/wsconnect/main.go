@@ -1,16 +1,4 @@
 // Package main implements the WebSocket $connect Lambda handler.
-//
-// In AWS, this is deployed as a Lambda function behind API Gateway WebSocket
-// $connect route. It extracts connection context from the API Gateway event,
-// validates the tenant, and registers the connection in DynamoDB.
-//
-// In local mode, WebSocket connect is handled by the taskapi server's
-// /ws/connect HTTP endpoint instead.
-//
-// Build for Lambda:
-//
-//	GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/wsconnect/main.go
-//	zip ws-connect.zip bootstrap
 package main
 
 import (
@@ -21,8 +9,11 @@ import (
 	"os"
 	"time"
 
+	appcfg "github.com/agentforge/agentforge/pkg/config"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/state"
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 // APIGatewayWebSocketRequest represents the incoming API Gateway WebSocket event.
@@ -100,25 +91,16 @@ func handler(ctx context.Context, store state.Store, event APIGatewayWebSocketRe
 }
 
 func main() {
-	// In production, replace this with:
-	//   import "github.com/aws/aws-lambda-go/lambda"
-	//   store := dynamodb.NewStore(...)
-	//   lambda.Start(func(ctx context.Context, event APIGatewayWebSocketRequest) (*APIGatewayResponse, error) {
-	//       return handler(ctx, store, event)
-	//   })
-	//
-	// For local development, the taskapi server handles /ws/connect directly.
+	store, err := initStore(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	_ = os.Getenv("CONNECTIONS_TABLE") // Would be used for DynamoDB store init.
-	_ = os.Getenv("TASKS_TABLE")       // Would be used for DynamoDB task store init.
-
-	// Demo: process a sample event from stdin (useful for testing).
-	var store state.Store = state.NewMemoryStore()
+	// Demo: process a sample event from stdin (useful for local testing).
 	var event APIGatewayWebSocketRequest
 	if err := json.NewDecoder(os.Stdin).Decode(&event); err != nil {
 		fmt.Println("WebSocket $connect Lambda handler")
 		fmt.Println("Usage: echo '{...}' | go run cmd/wsconnect/main.go")
-		fmt.Println("In local mode, use the taskapi server's /ws/connect endpoint.")
 		return
 	}
 
@@ -126,5 +108,29 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	json.NewEncoder(os.Stdout).Encode(resp)
+	_ = json.NewEncoder(os.Stdout).Encode(resp)
+}
+
+func initStore(ctx context.Context) (state.Store, error) {
+	if appcfg.RuntimeModeFromEnv() != appcfg.RuntimeModeAWS {
+		return state.NewMemoryStore(), nil
+	}
+
+	awsCfg, err := awscfg.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+
+	stateCfg, err := appcfg.LoadAWSStateConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return state.NewDynamoStore(dynamodb.NewFromConfig(awsCfg), state.DynamoStoreConfig{
+		TasksTable:       stateCfg.TasksTable,
+		RunsTable:        stateCfg.RunsTable,
+		StepsTable:       stateCfg.StepsTable,
+		ConnectionsTable: stateCfg.ConnectionsTable,
+		ConnectionIndex:  stateCfg.ConnectionIndex,
+	})
 }

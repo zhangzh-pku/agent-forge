@@ -561,6 +561,7 @@ resource "aws_lambda_function" "task_api" {
 
   environment {
     variables = {
+      AGENTFORGE_RUNTIME = "aws"
       ENVIRONMENT       = var.environment
       TASKS_TABLE       = aws_dynamodb_table.tasks.name
       RUNS_TABLE        = aws_dynamodb_table.runs.name
@@ -593,6 +594,7 @@ resource "aws_lambda_function" "worker" {
 
   environment {
     variables = {
+      AGENTFORGE_RUNTIME = "aws"
       ENVIRONMENT        = var.environment
       TASKS_TABLE        = aws_dynamodb_table.tasks.name
       RUNS_TABLE         = aws_dynamodb_table.runs.name
@@ -625,9 +627,12 @@ resource "aws_lambda_function" "ws_connect" {
 
   environment {
     variables = {
+      AGENTFORGE_RUNTIME = "aws"
       ENVIRONMENT       = var.environment
-      CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
       TASKS_TABLE       = aws_dynamodb_table.tasks.name
+      RUNS_TABLE        = aws_dynamodb_table.runs.name
+      STEPS_TABLE       = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
     }
   }
 
@@ -652,7 +657,11 @@ resource "aws_lambda_function" "ws_disconnect" {
 
   environment {
     variables = {
+      AGENTFORGE_RUNTIME = "aws"
       ENVIRONMENT       = var.environment
+      TASKS_TABLE       = aws_dynamodb_table.tasks.name
+      RUNS_TABLE        = aws_dynamodb_table.runs.name
+      STEPS_TABLE       = aws_dynamodb_table.steps.name
       CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
     }
   }

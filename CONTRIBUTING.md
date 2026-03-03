@@ -4,7 +4,7 @@ Thank you for your interest in contributing to AgentForge! This guide will help 
 
 ## Prerequisites
 
-- Go 1.22 or later
+- Go 1.24 or later
 - Make
 - Terraform 1.5+ (for infrastructure changes, optional)
 - AWS CLI v2 (optional, only needed for production deployment)
@@ -21,7 +21,7 @@ Thank you for your interest in contributing to AgentForge! This guide will help 
 2. Verify the build:
 
    ```bash
-   make build test
+   make ci
    ```
 
 ## Building
@@ -57,14 +57,16 @@ go test -short ./...
 ## Code Style
 
 - Follow standard Go conventions (`gofmt`, `go vet`).
-- Run the linter before submitting:
+- Before opening a PR, run:
 
   ```bash
-  make lint
+  make fmt
+  make ci
   ```
 
 - Keep functions focused and well-documented. Exported functions must have doc comments.
 - Error messages should be lowercase and should not end with punctuation.
+- Prefer introducing configuration via environment variables under `pkg/config` instead of ad-hoc parsing in command entrypoints.
 
 ## Submitting a Pull Request
 
@@ -81,7 +83,7 @@ go test -short ./...
 4. Ensure all checks pass:
 
    ```bash
-   make lint test
+   make ci
    ```
 
 5. Push your branch and open a pull request against `main`.
@@ -100,6 +102,12 @@ If your change modifies infrastructure in `deploy/terraform/`:
 1. Run `terraform fmt` to format your configuration.
 2. Run `terraform validate` to check for syntax errors.
 3. Include `terraform plan` output in the PR description (with sensitive values redacted).
+
+## Runtime Configuration
+
+- Use `.env.example` as the baseline for local and aws runtime variables.
+- `AGENTFORGE_RUNTIME=local` is default for development.
+- `AGENTFORGE_RUNTIME=aws` requires DynamoDB/S3/SQS environment variables documented in `README.md`.
 
 ## Reporting Issues
 

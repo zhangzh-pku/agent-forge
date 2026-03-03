@@ -83,12 +83,13 @@ cmd/
 
 pkg/
   api/              HTTP handlers, auth middleware, WebSocket handlers
-  artifact/         Artifact store interface + in-memory implementation
+  artifact/         Artifact store interface + S3 + in-memory implementations
+  config/           Runtime and environment configuration loading
   engine/           ReAct execution loop, LLM client interface, tool registry, worker
   memory/           Memory snapshot serialization (save/load to artifact store)
   model/            Domain types (Task, Run, Step, Connection, StreamEvent, etc.)
-  queue/            Queue interface + in-memory implementation
-  state/            Metadata store interface + in-memory implementation
+  queue/            Queue interface + SQS + in-memory implementations
+  state/            Metadata store interface + DynamoDB + in-memory implementations
   stream/           Stream events, chunker (time/byte flush), pusher interface
   task/             Task lifecycle service (create, get, abort, resume)
   util/             ID generation, structured logging
@@ -100,11 +101,16 @@ deploy/
 docs/               Architecture, API, and checkpoint documentation
 ```
 
+Key docs:
+- `docs/configuration.md` - full environment variable reference
+- `docs/coding-standards.md` - coding and review conventions
+- `docs/operations-runbook.md` - incident and partial-failure handling
+
 ## Quick Start
 
 ### Prerequisites
 
-- **Go 1.22+**
+- **Go 1.24+**
 - No AWS account required for local development.
 
 ### Run the tests
@@ -112,6 +118,14 @@ docs/               Architecture, API, and checkpoint documentation
 ```bash
 go test ./...
 ```
+
+### Bootstrap Local Env
+
+```bash
+cp .env.example .env
+```
+
+Use `.env` or exported shell variables for configuration while developing.
 
 ### Start the API server locally
 
@@ -129,6 +143,41 @@ PORT=9090 go run cmd/taskapi/main.go
 In local mode the server starts with an **embedded worker** that shares in-memory
 stores. Tasks submitted via the API are automatically processed — no separate
 worker process needed.
+
+### Runtime Mode
+
+`cmd/taskapi`, `cmd/worker`, `cmd/wsconnect`, and `cmd/wsdisconnect` support two
+runtime modes:
+
+| `AGENTFORGE_RUNTIME` | Behavior |
+|----------------------|----------|
+| `local` (default) | Uses in-memory state/artifact/queue backends |
+| `aws` | Uses DynamoDB + S3 + SQS production backends |
+
+When `AGENTFORGE_RUNTIME=aws`, set these required variables:
+
+| Variable | Description |
+|----------|-------------|
+| `TASKS_TABLE` | DynamoDB tasks table |
+| `RUNS_TABLE` | DynamoDB runs table |
+| `STEPS_TABLE` | DynamoDB steps table (also stores replay events) |
+| `CONNECTIONS_TABLE` | DynamoDB websocket connections table |
+| `TASK_QUEUE_URL` | SQS queue URL |
+| `ARTIFACTS_BUCKET` | S3 bucket for memory/workspace snapshots |
+
+Optional AWS runtime variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONNECTIONS_TASK_INDEX` | `task-index` | DynamoDB GSI name used to query task subscribers |
+| `WEBSOCKET_ENDPOINT` | _(empty)_ | API Gateway WebSocket management endpoint |
+| `ARTIFACT_PRESIGN_EXPIRES` | `15m` | S3 presigned URL TTL |
+| `SQS_WAIT_TIME_SECONDS` | `20` | SQS long-poll wait time |
+| `SQS_VISIBILITY_TIMEOUT_SECONDS` | `300` | SQS visibility timeout |
+| `SQS_MAX_MESSAGES` | `10` | Max messages per receive call |
+
+For complete variable coverage and per-component requirements, see
+`docs/configuration.md`.
 
 By default, AgentForge uses a deterministic mock LLM. To run against an OpenAI-
 compatible API instead:
@@ -181,6 +230,19 @@ The standalone worker can also be run separately if needed:
 ```bash
 go run cmd/worker/main.go
 ```
+
+## Development Workflow
+
+Standard local checks:
+
+```bash
+make fmt
+make ci
+```
+
+Reference:
+- `CONTRIBUTING.md`
+- `docs/coding-standards.md`
 
 The mock LLM client simulates a three-step tool-use conversation and then returns
 a final answer, which is useful for end-to-end testing of the full pipeline without

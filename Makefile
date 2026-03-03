@@ -1,33 +1,52 @@
-.PHONY: build test test-race lint clean
+.PHONY: build build-lambda fmt fmt-check vet test test-race lint ci clean
+
+GO ?= go
 
 # Build all binaries into bin/
 build:
 	@mkdir -p bin
-	go build -o bin/taskapi ./cmd/taskapi
-	go build -o bin/worker ./cmd/worker
-	go build -o bin/wsconnect ./cmd/wsconnect
-	go build -o bin/wsdisconnect ./cmd/wsdisconnect
+	$(GO) build -o bin/taskapi ./cmd/taskapi
+	$(GO) build -o bin/worker ./cmd/worker
+	$(GO) build -o bin/wsconnect ./cmd/wsconnect
+	$(GO) build -o bin/wsdisconnect ./cmd/wsdisconnect
 
 # Build for AWS Lambda (Linux ARM64)
 build-lambda:
 	@mkdir -p bin
-	GOOS=linux GOARCH=arm64 go build -o bin/taskapi-bootstrap ./cmd/taskapi
-	GOOS=linux GOARCH=arm64 go build -o bin/worker-bootstrap ./cmd/worker
-	GOOS=linux GOARCH=arm64 go build -o bin/wsconnect-bootstrap ./cmd/wsconnect
-	GOOS=linux GOARCH=arm64 go build -o bin/wsdisconnect-bootstrap ./cmd/wsdisconnect
+	GOOS=linux GOARCH=arm64 $(GO) build -o bin/taskapi-bootstrap ./cmd/taskapi
+	GOOS=linux GOARCH=arm64 $(GO) build -o bin/worker-bootstrap ./cmd/worker
+	GOOS=linux GOARCH=arm64 $(GO) build -o bin/wsconnect-bootstrap ./cmd/wsconnect
+	GOOS=linux GOARCH=arm64 $(GO) build -o bin/wsdisconnect-bootstrap ./cmd/wsdisconnect
+
+# Format code
+fmt:
+	gofmt -w .
+
+# Check formatting only (no write)
+fmt-check:
+	@test -z "$$(gofmt -l .)" || (echo "Run 'make fmt' to format files"; gofmt -l .; exit 1)
+
+# Static checks
+vet:
+	$(GO) vet ./...
 
 # Run tests
 test:
-	go test ./...
+	$(GO) test ./...
 
 # Run tests with race detector
 test-race:
-	go test -race ./...
+	$(GO) test -race ./...
 
-# Lint: format and vet
+# Lint checks (non-mutating)
 lint:
-	gofmt -l -w .
-	go vet ./...
+	$(MAKE) fmt-check
+	$(MAKE) vet
+
+# CI checks
+ci:
+	$(MAKE) lint
+	$(MAKE) test
 
 # Remove build artifacts
 clean:

@@ -1,0 +1,69 @@
+package config
+
+import (
+	"testing"
+	"time"
+)
+
+func TestParseRuntimeMode(t *testing.T) {
+	cases := map[string]RuntimeMode{
+		"":            RuntimeModeLocal,
+		"local":       RuntimeModeLocal,
+		"development": RuntimeModeLocal,
+		"aws":         RuntimeModeAWS,
+		"prod":        RuntimeModeAWS,
+		"custom":      RuntimeMode("custom"),
+	}
+	for in, want := range cases {
+		if got := ParseRuntimeMode(in); got != want {
+			t.Fatalf("ParseRuntimeMode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLoadAWSStateConfigFromEnv(t *testing.T) {
+	t.Setenv("TASKS_TABLE", "tasks")
+	t.Setenv("RUNS_TABLE", "runs")
+	t.Setenv("STEPS_TABLE", "steps")
+	t.Setenv("CONNECTIONS_TABLE", "connections")
+	t.Setenv("CONNECTIONS_TASK_INDEX", "task-index")
+
+	cfg, err := LoadAWSStateConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadAWSStateConfigFromEnv error: %v", err)
+	}
+	if cfg.TasksTable != "tasks" || cfg.RunsTable != "runs" || cfg.StepsTable != "steps" || cfg.ConnectionsTable != "connections" {
+		t.Fatalf("unexpected state config: %+v", cfg)
+	}
+}
+
+func TestLoadAWSRuntimeConfigFromEnv(t *testing.T) {
+	t.Setenv("TASKS_TABLE", "tasks")
+	t.Setenv("RUNS_TABLE", "runs")
+	t.Setenv("STEPS_TABLE", "steps")
+	t.Setenv("CONNECTIONS_TABLE", "connections")
+	t.Setenv("TASK_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123/agentforge")
+	t.Setenv("ARTIFACTS_BUCKET", "agentforge-artifacts")
+	t.Setenv("WEBSOCKET_ENDPOINT", "wss://abc.execute-api.us-east-1.amazonaws.com/prod")
+	t.Setenv("ARTIFACT_PRESIGN_EXPIRES", "30m")
+	t.Setenv("SQS_WAIT_TIME_SECONDS", "15")
+	t.Setenv("SQS_VISIBILITY_TIMEOUT_SECONDS", "600")
+	t.Setenv("SQS_MAX_MESSAGES", "5")
+
+	cfg, err := LoadAWSRuntimeConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadAWSRuntimeConfigFromEnv error: %v", err)
+	}
+	if cfg.TaskQueueURL == "" || cfg.ArtifactsBucket == "" {
+		t.Fatalf("missing required runtime fields: %+v", cfg)
+	}
+	if cfg.WebSocketEndpoint != "https://abc.execute-api.us-east-1.amazonaws.com/prod" {
+		t.Fatalf("unexpected websocket endpoint: %s", cfg.WebSocketEndpoint)
+	}
+	if cfg.ArtifactPresignExpires != 30*time.Minute {
+		t.Fatalf("unexpected presign expires: %s", cfg.ArtifactPresignExpires)
+	}
+	if cfg.SQSWaitTimeSeconds != 15 || cfg.SQSVisibilityTimeoutSeconds != 600 || cfg.SQSMaxMessages != 5 {
+		t.Fatalf("unexpected sqs config: %+v", cfg)
+	}
+}

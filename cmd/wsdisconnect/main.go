@@ -1,15 +1,4 @@
 // Package main implements the WebSocket $disconnect Lambda handler.
-//
-// In AWS, this is deployed as a Lambda function behind API Gateway WebSocket
-// $disconnect route. It removes the connection record from DynamoDB.
-//
-// In local mode, WebSocket disconnect is handled by the taskapi server's
-// /ws/disconnect HTTP endpoint instead.
-//
-// Build for Lambda:
-//
-//	GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/wsdisconnect/main.go
-//	zip ws-disconnect.zip bootstrap
 package main
 
 import (
@@ -19,7 +8,10 @@ import (
 	"log"
 	"os"
 
+	appcfg "github.com/agentforge/agentforge/pkg/config"
 	"github.com/agentforge/agentforge/pkg/state"
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 // APIGatewayWebSocketRequest represents the incoming API Gateway WebSocket event.
@@ -53,22 +45,16 @@ func handler(ctx context.Context, store state.ConnectionStore, event APIGatewayW
 }
 
 func main() {
-	// In production, replace this with:
-	//   import "github.com/aws/aws-lambda-go/lambda"
-	//   store := dynamodb.NewStore(...)
-	//   lambda.Start(func(ctx context.Context, event APIGatewayWebSocketRequest) (*APIGatewayResponse, error) {
-	//       return handler(ctx, store, event)
-	//   })
-
-	_ = os.Getenv("CONNECTIONS_TABLE")
+	store, err := initStore(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Demo: process a sample event from stdin.
-	store := state.NewMemoryStore()
 	var event APIGatewayWebSocketRequest
 	if err := json.NewDecoder(os.Stdin).Decode(&event); err != nil {
 		fmt.Println("WebSocket $disconnect Lambda handler")
 		fmt.Println("Usage: echo '{...}' | go run cmd/wsdisconnect/main.go")
-		fmt.Println("In local mode, use the taskapi server's /ws/disconnect endpoint.")
 		return
 	}
 
@@ -76,5 +62,29 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	json.NewEncoder(os.Stdout).Encode(resp)
+	_ = json.NewEncoder(os.Stdout).Encode(resp)
+}
+
+func initStore(ctx context.Context) (state.ConnectionStore, error) {
+	if appcfg.RuntimeModeFromEnv() != appcfg.RuntimeModeAWS {
+		return state.NewMemoryStore(), nil
+	}
+
+	awsCfg, err := awscfg.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+
+	stateCfg, err := appcfg.LoadAWSStateConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return state.NewDynamoStore(dynamodb.NewFromConfig(awsCfg), state.DynamoStoreConfig{
+		TasksTable:       stateCfg.TasksTable,
+		RunsTable:        stateCfg.RunsTable,
+		StepsTable:       stateCfg.StepsTable,
+		ConnectionsTable: stateCfg.ConnectionsTable,
+		ConnectionIndex:  stateCfg.ConnectionIndex,
+	})
 }

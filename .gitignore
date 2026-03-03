@@ -18,6 +18,11 @@ deploy/terraform/placeholder.zip
 # OS
 .DS_Store
 
+# Local environment files
+.env
+.env.local
+.env.*.local
+
 # Local agent/prompt notes (should stay local)
 agent.md
 claude.md
