@@ -40,6 +40,8 @@ type TaskStore interface {
 	ApplyResumeTransition(ctx context.Context, taskID string, run *model.Run, from []model.TaskStatus, to model.TaskStatus) error
 	// GetTaskByIdempotencyKey looks up a task by tenant + idempotency key.
 	GetTaskByIdempotencyKey(ctx context.Context, tenantID, idempotencyKey string) (*model.Task, error)
+	// ListTasks lists tasks optionally filtered by tenant and statuses.
+	ListTasks(ctx context.Context, tenantID string, statuses []model.TaskStatus, limit int) ([]*model.Task, error)
 }
 
 // RunStore persists run (attempt) metadata.
@@ -54,6 +56,12 @@ type RunStore interface {
 	CompleteRun(ctx context.Context, taskID, runID string, status model.RunStatus) error
 	// UpdateLastStepIndex updates the run's last_step_index.
 	UpdateLastStepIndex(ctx context.Context, taskID, runID string, stepIndex int) error
+	// AddRunUsage accumulates token/cost usage for a run.
+	AddRunUsage(ctx context.Context, taskID, runID string, usage *model.TokenUsage, costUSD float64) error
+	// ResetRunToQueued re-drives a run back to RUN_QUEUED state.
+	ResetRunToQueued(ctx context.Context, taskID, runID string) error
+	// ListRuns lists runs optionally filtered by tenant and statuses.
+	ListRuns(ctx context.Context, tenantID string, statuses []model.RunStatus, limit int) ([]*model.Run, error)
 }
 
 // StepStore persists step metadata.
@@ -78,10 +86,21 @@ type ConnectionStore interface {
 	GetConnectionsByTask(ctx context.Context, taskID string) ([]*model.Connection, error)
 }
 
+// EventStore persists stream events for replay/reconnect recovery.
+type EventStore interface {
+	// PutEvent appends a stream event.
+	PutEvent(ctx context.Context, event *model.StreamEvent) error
+	// ReplayEvents fetches events from a sequence/timestamp offset.
+	ReplayEvents(ctx context.Context, taskID, runID string, fromSeq, fromTS int64, limit int) ([]*model.StreamEvent, error)
+	// CompactEvents removes retained events older than beforeTS for a run.
+	CompactEvents(ctx context.Context, taskID, runID string, beforeTS int64) (int, error)
+}
+
 // Store combines all sub-stores for convenience.
 type Store interface {
 	TaskStore
 	RunStore
 	StepStore
 	ConnectionStore
+	EventStore
 }

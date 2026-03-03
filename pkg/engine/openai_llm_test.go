@@ -354,8 +354,12 @@ func TestNewLLMClientFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := client.(*MockLLMClient); !ok {
-		t.Fatalf("expected mock client, got %T", client)
+	routed, ok := client.(*RoutedLLMClient)
+	if !ok {
+		t.Fatalf("expected routed client, got %T", client)
+	}
+	if _, ok := routed.clients[llmProviderMock].(*MockLLMClient); !ok {
+		t.Fatalf("expected routed mock provider client, got %T", routed.clients[llmProviderMock])
 	}
 }
 

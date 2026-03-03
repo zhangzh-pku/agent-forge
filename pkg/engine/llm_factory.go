@@ -28,6 +28,44 @@ func NewLLMClientFromEnv() (LLMClient, error) {
 		provider = llmProviderMock
 	}
 
+	primary, err := newLLMClientForProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+
+	clients := map[string]LLMClient{
+		provider: primary,
+	}
+
+	var fallbackProviders []string
+	if raw := strings.TrimSpace(os.Getenv("AGENTFORGE_LLM_FALLBACK_PROVIDERS")); raw != "" {
+		parts := strings.Split(raw, ",")
+		for _, part := range parts {
+			p := strings.ToLower(strings.TrimSpace(part))
+			if p == "" || p == provider {
+				continue
+			}
+			if _, exists := clients[p]; exists {
+				continue
+			}
+			client, err := newLLMClientForProvider(p)
+			if err != nil {
+				return nil, fmt.Errorf("engine: initialize fallback provider %q: %w", p, err)
+			}
+			clients[p] = client
+			fallbackProviders = append(fallbackProviders, p)
+		}
+	}
+
+	// Always wrap with router to enable task-aware model selection and policy modes.
+	router := NewModelRouter(RouterConfig{
+		DefaultMode:       strings.TrimSpace(os.Getenv("AGENTFORGE_LLM_ROUTING_DEFAULT_MODE")),
+		FallbackProviders: fallbackProviders,
+	})
+	return NewRoutedLLMClient(provider, clients, router), nil
+}
+
+func newLLMClientForProvider(provider string) (LLMClient, error) {
 	switch provider {
 	case llmProviderMock:
 		maxSteps := 3

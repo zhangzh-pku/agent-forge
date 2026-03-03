@@ -32,6 +32,10 @@ func (m *MockLLMClient) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse
 	}
 
 	count := int(m.callCount.Add(1))
+	modelID := "mock-default"
+	if req != nil && req.ModelConfig != nil && req.ModelConfig.ModelID != "" {
+		modelID = req.ModelConfig.ModelID
+	}
 
 	if count <= m.maxSteps {
 		// Return a tool call.
@@ -45,6 +49,8 @@ func (m *MockLLMClient) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse
 			},
 			TokenUsage:   &model.TokenUsage{Input: 100, Output: 50, Total: 150},
 			FinishReason: "tool_calls",
+			ModelID:      modelID,
+			Provider:     "mock",
 		}, nil
 	}
 
@@ -53,6 +59,8 @@ func (m *MockLLMClient) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse
 		Content:      fmt.Sprintf("Task complete after %d steps.", count-1),
 		TokenUsage:   &model.TokenUsage{Input: 80, Output: 30, Total: 110},
 		FinishReason: "stop",
+		ModelID:      modelID,
+		Provider:     "mock",
 	}, nil
 }
 

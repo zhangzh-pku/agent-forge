@@ -12,6 +12,7 @@ import (
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
+	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/task"
 )
 
@@ -20,6 +21,7 @@ func setupTestServer() (*http.ServeMux, *state.MemoryStore) {
 	q := queue.NewMemoryQueue(100)
 	svc := task.NewService(store, q)
 	handler := NewHandler(svc)
+	handler.SetTenantRuntimeProvider(q)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
@@ -117,6 +119,70 @@ func TestGetTask(t *testing.T) {
 	rr = doRequest(mux, "GET", "/tasks/"+createResp["task_id"], nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestGetRun(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	rr := doRequest(mux, "POST", "/tasks", map[string]string{"prompt": "test"})
+	var createResp map[string]string
+	json.NewDecoder(rr.Body).Decode(&createResp)
+
+	rr = doRequest(mux, "GET", "/tasks/"+createResp["task_id"]+"/runs/"+createResp["run_id"], nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var runResp map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&runResp); err != nil {
+		t.Fatal(err)
+	}
+	if runResp["run_id"] != createResp["run_id"] {
+		t.Fatalf("expected run_id=%s, got %v", createResp["run_id"], runResp["run_id"])
+	}
+}
+
+func TestReplayEvents(t *testing.T) {
+	mux, store := setupTestServer()
+
+	rr := doRequest(mux, "POST", "/tasks", map[string]string{"prompt": "test"})
+	var createResp map[string]string
+	json.NewDecoder(rr.Body).Decode(&createResp)
+
+	_ = store.PutEvent(context.Background(), &model.StreamEvent{
+		TaskID: createResp["task_id"],
+		RunID:  createResp["run_id"],
+		Seq:    1,
+		TS:     time.Now().Unix(),
+		Type:   model.StreamEventStepStart,
+	})
+	_ = store.PutEvent(context.Background(), &model.StreamEvent{
+		TaskID: createResp["task_id"],
+		RunID:  createResp["run_id"],
+		Seq:    2,
+		TS:     time.Now().Unix(),
+		Type:   model.StreamEventStepEnd,
+	})
+
+	rr = doRequest(mux, "GET", "/tasks/"+createResp["task_id"]+"/runs/"+createResp["run_id"]+"/events/replay?from_seq=1", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Events []model.StreamEvent `json:"events"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Events) != 1 || body.Events[0].Seq != 2 {
+		t.Fatalf("expected replay seq 2, got %+v", body.Events)
+	}
+
+	compactBody := map[string]interface{}{"before_ts": time.Now().Add(time.Second).Unix()}
+	rr = doRequest(mux, "POST", "/tasks/"+createResp["task_id"]+"/runs/"+createResp["run_id"]+"/events/compact", compactBody)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 on compact, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -285,6 +351,60 @@ func TestCreateTaskEmptyPrompt(t *testing.T) {
 	})
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestGetTenantRuntime(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	rr := doRequest(mux, "POST", "/tasks", map[string]string{
+		"prompt": "hello runtime",
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create task: expected 201, got %d", rr.Code)
+	}
+
+	rr = doRequest(mux, "GET", "/tenants/tnt_1/runtime", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("runtime: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["tenant_id"] != "tnt_1" {
+		t.Fatalf("expected tenant_id=tnt_1, got %v", body["tenant_id"])
+	}
+}
+
+func TestGetTenantAlerts(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	rr := doRequest(mux, "GET", "/tenants/tnt_1/alerts?limit=10", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("alerts: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["alerts"]; !ok {
+		t.Fatalf("expected alerts field, got %v", body)
+	}
+}
+
+func TestGetTenantRuntimeWrongTenant(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/tenants/tnt_2/runtime", nil)
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-tenant runtime access, got %d", rr.Code)
 	}
 }
 
@@ -642,6 +762,63 @@ func TestWSConnectTaskOwnershipValidation(t *testing.T) {
 	conns, _ = store.GetConnectionsByTask(context.Background(), createResp.TaskID)
 	if len(conns) != 1 {
 		t.Fatalf("expected 1 connection, got %d", len(conns))
+	}
+}
+
+func TestWSReconnectGapReplay(t *testing.T) {
+	store := state.NewMemoryStore()
+	q := queue.NewMemoryQueue(100)
+	svc := task.NewService(store, q)
+	pusher := stream.NewMockPusher()
+
+	createResp, err := svc.Create(context.Background(), &task.CreateRequest{
+		TenantID: "tnt_1",
+		UserID:   "user_1",
+		Prompt:   "test replay",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Persist events seq=1..3 for replay.
+	for i := int64(1); i <= 3; i++ {
+		if err := store.PutEvent(context.Background(), &model.StreamEvent{
+			TaskID: createResp.TaskID,
+			RunID:  createResp.RunID,
+			Seq:    i,
+			TS:     time.Now().Unix(),
+			Type:   model.StreamEventStepEnd,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wsHandler := NewWSHandler(store, svc)
+	wsHandler.SetReplayPusher(pusher)
+	mux := http.NewServeMux()
+	wsHandler.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"connection_id": "conn_replay",
+		"task_id":       createResp.TaskID,
+		"run_id":        createResp.RunID,
+		"last_seq":      1,
+	})
+	req := httptest.NewRequest("POST", "/ws/connect", bytes.NewReader(body))
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	events := pusher.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 replay events, got %d", len(events))
+	}
+	if events[0].Event.Seq != 2 || events[1].Event.Seq != 3 {
+		t.Fatalf("expected replay seq 2,3 got %d,%d", events[0].Event.Seq, events[1].Event.Seq)
 	}
 }
 

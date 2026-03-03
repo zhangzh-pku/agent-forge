@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
@@ -66,6 +67,8 @@ type RunResult struct {
 	Status       model.RunStatus
 	LastStep     int
 	ErrorMessage string
+	TotalTokens  int
+	TotalCostUSD float64
 }
 
 // Execute runs the ReAct loop for a given task and run.
@@ -82,6 +85,9 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		Messages:  []model.MemoryMessage{},
 		ToolState: make(map[string]interface{}),
 	}
+	taskType := classifyTaskPrompt(task.Prompt)
+	var totalTokens int
+	var totalCost float64
 
 	startStep := 0
 
@@ -163,8 +169,10 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			})
 			e.metrics.TaskAborted()
 			return &RunResult{
-				Status:   model.RunStatusAborted,
-				LastStep: stepIdx,
+				Status:       model.RunStatusAborted,
+				LastStep:     stepIdx,
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
 			}, nil
 		}
 
@@ -176,6 +184,8 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				Status:       model.RunStatusFailed,
 				LastStep:     stepIdx - 1,
 				ErrorMessage: "context cancelled",
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
 			}, nil
 		default:
 		}
@@ -192,6 +202,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			Messages:    mem.Messages,
 			ModelConfig: run.ModelConfig,
 			Tools:       collectToolSpecs(e.tools),
+			TaskType:    taskType,
 		}
 		var llmResp *LLMResponse
 		var llmErr error
@@ -219,7 +230,18 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				Status:       model.RunStatusFailed,
 				LastStep:     stepIdx,
 				ErrorMessage: llmErr.Error(),
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
 			}, nil
+		}
+
+		stepCost := EstimateUsageCostUSD(llmResp.ModelID, llmResp.TokenUsage)
+		if llmResp.TokenUsage != nil {
+			totalTokens += llmResp.TokenUsage.Total
+		}
+		totalCost += stepCost
+		if err := e.store.AddRunUsage(ctx, task.TaskID, run.RunID, llmResp.TokenUsage, stepCost); err != nil {
+			log.Error("engine: add run usage failed", map[string]interface{}{"error": err.Error()})
 		}
 
 		assistantToolCalls := make([]model.MemoryToolCall, 0, len(llmResp.ToolCalls))
@@ -271,6 +293,8 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 							Status:       model.RunStatusFailed,
 							LastStep:     stepIdx,
 							ErrorMessage: fmt.Sprintf("tool %s execution failed: %v", tc.Name, err),
+							TotalTokens:  totalTokens,
+							TotalCostUSD: totalCost,
 						}, nil
 					} else if result.Error != "" {
 						toolOutput = fmt.Sprintf("error: %s", result.Error)
@@ -305,6 +329,8 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				Status:       model.RunStatusFailed,
 				LastStep:     stepIdx,
 				ErrorMessage: fmt.Sprintf("memory checkpoint failed: %v", err),
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
 			}, nil
 		}
 
@@ -316,6 +342,8 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				Status:       model.RunStatusFailed,
 				LastStep:     stepIdx,
 				ErrorMessage: fmt.Sprintf("workspace checkpoint failed: %v", err),
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
 			}, nil
 		}
 
@@ -347,6 +375,8 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 					Status:       model.RunStatusFailed,
 					LastStep:     stepIdx,
 					ErrorMessage: fmt.Sprintf("write step failed: %v", err),
+					TotalTokens:  totalTokens,
+					TotalCostUSD: totalCost,
 				}, nil
 			}
 			// ErrConflict means the step was already written (idempotent retry) — continue.
@@ -398,8 +428,10 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 
 			e.metrics.TaskSucceeded()
 			return &RunResult{
-				Status:   model.RunStatusSucceeded,
-				LastStep: stepIdx + 1,
+				Status:       model.RunStatusSucceeded,
+				LastStep:     stepIdx + 1,
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
 			}, nil
 		}
 	}
@@ -414,7 +446,23 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		Status:       model.RunStatusFailed,
 		LastStep:     startStep + e.cfg.MaxSteps - 1,
 		ErrorMessage: "max steps reached",
+		TotalTokens:  totalTokens,
+		TotalCostUSD: totalCost,
 	}, nil
+}
+
+func classifyTaskPrompt(prompt string) string {
+	p := strings.ToLower(prompt)
+	switch {
+	case strings.Contains(p, "code"), strings.Contains(p, "bug"), strings.Contains(p, "test"), strings.Contains(p, "refactor"):
+		return "coding"
+	case strings.Contains(p, "analy"), strings.Contains(p, "report"), strings.Contains(p, "sql"), strings.Contains(p, "metric"):
+		return "analysis"
+	case strings.Contains(p, "summar"), strings.Contains(p, "rewrite"), strings.Contains(p, "translate"):
+		return "writing"
+	default:
+		return "general"
+	}
 }
 
 func collectToolSpecs(reg ToolRegistry) []ToolSpec {
@@ -481,6 +529,9 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 		TS:     time.Now().Unix(),
 		Type:   eventType,
 		Data:   data,
+	}
+	if err := e.store.PutEvent(ctx, event); err != nil {
+		e.log.Error("engine: persist stream event failed", map[string]interface{}{"error": err.Error(), "type": string(eventType)})
 	}
 	// Get connections for this task and push.
 	conns, err := e.store.GetConnectionsByTask(ctx, taskID)

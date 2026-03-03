@@ -114,13 +114,20 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		return nil, err
 	}
 
+	taskType := InferTaskType(req.Prompt)
+	estimatedTokens, estimatedCost := EstimateUsage(req.Prompt, req.ModelConfig)
+
 	// Enqueue pointer message.
 	if err := s.queue.Enqueue(ctx, &model.SQSMessage{
-		TenantID:    req.TenantID,
-		TaskID:      taskID,
-		RunID:       runID,
-		SubmittedAt: now.Unix(),
-		Attempt:     1,
+		TenantID:        req.TenantID,
+		TaskID:          taskID,
+		RunID:           runID,
+		TaskType:        taskType,
+		SubmittedAt:     now.Unix(),
+		Attempt:         1,
+		DedupeKey:       taskID + "#" + runID,
+		EstimatedTokens: estimatedTokens,
+		EstimatedCost:   estimatedCost,
 	}); err != nil {
 		return nil, err
 	}
@@ -229,12 +236,19 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 		return nil, err
 	}
 
+	taskType := InferTaskType(task.Prompt)
+	estimatedTokens, estimatedCost := EstimateUsage(task.Prompt, mc)
+
 	if err := s.queue.Enqueue(ctx, &model.SQSMessage{
-		TenantID:    req.TenantID,
-		TaskID:      taskID,
-		RunID:       newRunID,
-		SubmittedAt: now.Unix(),
-		Attempt:     1,
+		TenantID:        req.TenantID,
+		TaskID:          taskID,
+		RunID:           newRunID,
+		TaskType:        taskType,
+		SubmittedAt:     now.Unix(),
+		Attempt:         1,
+		DedupeKey:       taskID + "#" + newRunID,
+		EstimatedTokens: estimatedTokens,
+		EstimatedCost:   estimatedCost,
 	}); err != nil {
 		// Keep state consistent if enqueue fails: mark the new run/task as failed
 		// instead of leaving them stuck in QUEUED forever.
@@ -249,6 +263,52 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 // ListSteps retrieves steps for a run with pagination.
 func (s *Service) ListSteps(ctx context.Context, tenantID, taskID, runID string, from, limit int) ([]*model.Step, error) {
 	return s.ListStepsForUser(ctx, tenantID, "", taskID, runID, from, limit)
+}
+
+// GetRunForUser retrieves run metadata with tenant/user access validation.
+func (s *Service) GetRunForUser(ctx context.Context, tenantID, userID, taskID, runID string) (*model.Run, error) {
+	task, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasTaskAccess(task, tenantID, userID) {
+		return nil, state.ErrNotFound
+	}
+	run, err := s.store.GetRun(ctx, taskID, runID)
+	if err != nil {
+		return nil, state.ErrNotFound
+	}
+	return run, nil
+}
+
+// ReplayEventsForUser fetches persisted stream events for reconnect replay.
+func (s *Service) ReplayEventsForUser(ctx context.Context, tenantID, userID, taskID, runID string, fromSeq, fromTS int64, limit int) ([]*model.StreamEvent, error) {
+	taskObj, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasTaskAccess(taskObj, tenantID, userID) {
+		return nil, state.ErrNotFound
+	}
+	if _, err := s.store.GetRun(ctx, taskID, runID); err != nil {
+		return nil, state.ErrNotFound
+	}
+	return s.store.ReplayEvents(ctx, taskID, runID, fromSeq, fromTS, limit)
+}
+
+// CompactRunEventsForUser compacts old persisted stream events.
+func (s *Service) CompactRunEventsForUser(ctx context.Context, tenantID, userID, taskID, runID string, beforeTS int64) (int, error) {
+	taskObj, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		return 0, err
+	}
+	if !hasTaskAccess(taskObj, tenantID, userID) {
+		return 0, state.ErrNotFound
+	}
+	if _, err := s.store.GetRun(ctx, taskID, runID); err != nil {
+		return 0, state.ErrNotFound
+	}
+	return s.store.CompactEvents(ctx, taskID, runID, beforeTS)
 }
 
 // ListStepsForUser retrieves steps for a run with tenant/user access validation.

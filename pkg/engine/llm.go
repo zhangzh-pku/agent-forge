@@ -13,6 +13,7 @@ type LLMRequest struct {
 	Messages    []model.MemoryMessage `json:"messages"`
 	ModelConfig *model.ModelConfig    `json:"model_config,omitempty"`
 	Tools       []ToolSpec            `json:"tools,omitempty"`
+	TaskType    string                `json:"task_type,omitempty"`
 }
 
 // LLMResponse is the output of an LLM call.
@@ -21,6 +22,8 @@ type LLMResponse struct {
 	ToolCalls    []ToolCall        `json:"tool_calls,omitempty"`
 	TokenUsage   *model.TokenUsage `json:"token_usage,omitempty"`
 	FinishReason string            `json:"finish_reason,omitempty"`
+	ModelID      string            `json:"model_id,omitempty"`
+	Provider     string            `json:"provider,omitempty"`
 }
 
 // ToolCall represents a tool invocation requested by the LLM.

@@ -12,22 +12,26 @@ import (
 
 // MemoryStore is an in-memory implementation of Store for testing and local dev.
 type MemoryStore struct {
-	mu          sync.RWMutex
-	tasks       map[string]*model.Task       // keyed by task_id
-	runs        map[string]*model.Run        // keyed by "task_id#run_id"
-	steps       map[string]*model.Step       // keyed by "run_id#step_index"
-	connections map[string]*model.Connection // keyed by connection_id
-	idempotency map[string]string            // keyed by "tenant_id#idempotency_key" → task_id
+	mu             sync.RWMutex
+	tasks          map[string]*model.Task          // keyed by task_id
+	runs           map[string]*model.Run           // keyed by "task_id#run_id"
+	steps          map[string]*model.Step          // keyed by "run_id#step_index"
+	connections    map[string]*model.Connection    // keyed by connection_id
+	events         map[string][]*model.StreamEvent // keyed by run_id
+	eventRetention time.Duration
+	idempotency    map[string]string // keyed by "tenant_id#idempotency_key" → task_id
 }
 
 // NewMemoryStore creates a new in-memory state store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		tasks:       make(map[string]*model.Task),
-		runs:        make(map[string]*model.Run),
-		steps:       make(map[string]*model.Step),
-		connections: make(map[string]*model.Connection),
-		idempotency: make(map[string]string),
+		tasks:          make(map[string]*model.Task),
+		runs:           make(map[string]*model.Run),
+		steps:          make(map[string]*model.Step),
+		connections:    make(map[string]*model.Connection),
+		events:         make(map[string][]*model.StreamEvent),
+		eventRetention: 24 * time.Hour,
+		idempotency:    make(map[string]string),
 	}
 }
 
@@ -40,6 +44,9 @@ func cloneTask(t *model.Task) *model.Task {
 	clone := *t
 	if t.ModelConfig != nil {
 		mc := *t.ModelConfig
+		if len(t.ModelConfig.FallbackModelIDs) > 0 {
+			mc.FallbackModelIDs = append([]string(nil), t.ModelConfig.FallbackModelIDs...)
+		}
 		clone.ModelConfig = &mc
 	}
 	if t.AbortTS != nil {
@@ -54,6 +61,9 @@ func cloneRun(r *model.Run) *model.Run {
 	clone := *r
 	if r.ModelConfig != nil {
 		mc := *r.ModelConfig
+		if len(r.ModelConfig.FallbackModelIDs) > 0 {
+			mc.FallbackModelIDs = append([]string(nil), r.ModelConfig.FallbackModelIDs...)
+		}
 		clone.ModelConfig = &mc
 	}
 	if r.StartedAt != nil {
@@ -67,6 +77,10 @@ func cloneRun(r *model.Run) *model.Run {
 	if r.ResumeFromStepIndex != nil {
 		idx := *r.ResumeFromStepIndex
 		clone.ResumeFromStepIndex = &idx
+	}
+	if r.TotalTokenUsage != nil {
+		tu := *r.TotalTokenUsage
+		clone.TotalTokenUsage = &tu
 	}
 	return &clone
 }
@@ -90,6 +104,14 @@ func cloneStep(st *model.Step) *model.Step {
 		}
 		clone.CheckpointRef = &cr
 	}
+	return &clone
+}
+
+func cloneEvent(ev *model.StreamEvent) *model.StreamEvent {
+	if ev == nil {
+		return nil
+	}
+	clone := *ev
 	return &clone
 }
 
@@ -286,6 +308,39 @@ func (s *MemoryStore) GetTaskByIdempotencyKey(_ context.Context, tenantID, idemp
 	return cloneTask(t), nil
 }
 
+func (s *MemoryStore) ListTasks(_ context.Context, tenantID string, statuses []model.TaskStatus, limit int) ([]*model.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	filterStatus := make(map[model.TaskStatus]struct{}, len(statuses))
+	for _, st := range statuses {
+		filterStatus[st] = struct{}{}
+	}
+
+	out := make([]*model.Task, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		if tenantID != "" && task.TenantID != tenantID {
+			continue
+		}
+		if len(filterStatus) > 0 {
+			if _, ok := filterStatus[task.Status]; !ok {
+				continue
+			}
+		}
+		out = append(out, cloneTask(task))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].TaskID < out[j].TaskID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // --- RunStore ---
 
 func (s *MemoryStore) PutRun(_ context.Context, run *model.Run) error {
@@ -352,6 +407,83 @@ func (s *MemoryStore) UpdateLastStepIndex(_ context.Context, taskID, runID strin
 	}
 	r.LastStepIndex = stepIndex
 	return nil
+}
+
+func (s *MemoryStore) AddRunUsage(_ context.Context, taskID, runID string, usage *model.TokenUsage, costUSD float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.runs[runKey(taskID, runID)]
+	if !ok {
+		return ErrNotFound
+	}
+	if usage != nil {
+		if r.TotalTokenUsage == nil {
+			r.TotalTokenUsage = &model.TokenUsage{}
+		}
+		r.TotalTokenUsage.Input += usage.Input
+		r.TotalTokenUsage.Output += usage.Output
+		r.TotalTokenUsage.Total += usage.Total
+	}
+	if costUSD > 0 {
+		r.TotalCostUSD += costUSD
+	}
+	return nil
+}
+
+func (s *MemoryStore) ResetRunToQueued(_ context.Context, taskID, runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.runs[runKey(taskID, runID)]
+	if !ok {
+		return ErrNotFound
+	}
+	r.Status = model.RunStatusQueued
+	r.StartedAt = nil
+	r.EndedAt = nil
+	return nil
+}
+
+func (s *MemoryStore) ListRuns(_ context.Context, tenantID string, statuses []model.RunStatus, limit int) ([]*model.Run, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	filterStatus := make(map[model.RunStatus]struct{}, len(statuses))
+	for _, st := range statuses {
+		filterStatus[st] = struct{}{}
+	}
+
+	out := make([]*model.Run, 0, len(s.runs))
+	for _, run := range s.runs {
+		if tenantID != "" && run.TenantID != tenantID {
+			continue
+		}
+		if len(filterStatus) > 0 {
+			if _, ok := filterStatus[run.Status]; !ok {
+				continue
+			}
+		}
+		out = append(out, cloneRun(run))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		iStart := time.Time{}
+		jStart := time.Time{}
+		if out[i].StartedAt != nil {
+			iStart = *out[i].StartedAt
+		}
+		if out[j].StartedAt != nil {
+			jStart = *out[j].StartedAt
+		}
+		if iStart.Equal(jStart) {
+			return runKey(out[i].TaskID, out[i].RunID) < runKey(out[j].TaskID, out[j].RunID)
+		}
+		return iStart.Before(jStart)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // --- StepStore ---
@@ -441,4 +573,112 @@ func (s *MemoryStore) GetConnectionsByTask(_ context.Context, taskID string) ([]
 		}
 	}
 	return result, nil
+}
+
+// --- EventStore ---
+
+func (s *MemoryStore) PutEvent(_ context.Context, event *model.StreamEvent) error {
+	if event == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if event.RunID == "" {
+		return ErrConflict
+	}
+	if event.TS == 0 {
+		event.TS = time.Now().Unix()
+	}
+	runEvents := s.events[event.RunID]
+	// Deduplicate by sequence within a run.
+	for _, existing := range runEvents {
+		if existing.Seq == event.Seq {
+			return nil
+		}
+	}
+	runEvents = append(runEvents, cloneEvent(event))
+	sort.Slice(runEvents, func(i, j int) bool {
+		if runEvents[i].Seq == runEvents[j].Seq {
+			return runEvents[i].TS < runEvents[j].TS
+		}
+		return runEvents[i].Seq < runEvents[j].Seq
+	})
+	// Retention compaction.
+	if s.eventRetention > 0 {
+		cutoff := time.Now().Add(-s.eventRetention).Unix()
+		filtered := runEvents[:0]
+		for _, ev := range runEvents {
+			if ev.TS >= cutoff {
+				filtered = append(filtered, ev)
+			}
+		}
+		runEvents = filtered
+	}
+	s.events[event.RunID] = runEvents
+	return nil
+}
+
+func (s *MemoryStore) ReplayEvents(_ context.Context, taskID, runID string, fromSeq, fromTS int64, limit int) ([]*model.StreamEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	runEvents := s.events[runID]
+	if len(runEvents) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	out := make([]*model.StreamEvent, 0, minInt(limit, len(runEvents)))
+	for _, ev := range runEvents {
+		if taskID != "" && ev.TaskID != taskID {
+			continue
+		}
+		if fromSeq > 0 && ev.Seq <= fromSeq {
+			continue
+		}
+		if fromTS > 0 && ev.TS < fromTS {
+			continue
+		}
+		out = append(out, cloneEvent(ev))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) CompactEvents(_ context.Context, taskID, runID string, beforeTS int64) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if beforeTS <= 0 {
+		return 0, nil
+	}
+	runEvents := s.events[runID]
+	if len(runEvents) == 0 {
+		return 0, nil
+	}
+	removed := 0
+	kept := runEvents[:0]
+	for _, ev := range runEvents {
+		if taskID != "" && ev.TaskID != taskID {
+			kept = append(kept, ev)
+			continue
+		}
+		if ev.TS < beforeTS {
+			removed++
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	s.events[runID] = kept
+	return removed, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

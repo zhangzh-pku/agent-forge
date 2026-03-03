@@ -72,6 +72,8 @@ type Run struct {
 	StartedAt           *time.Time   `json:"started_at,omitempty"`
 	EndedAt             *time.Time   `json:"ended_at,omitempty"`
 	LastStepIndex       int          `json:"last_step_index"`
+	TotalTokenUsage     *TokenUsage  `json:"total_token_usage,omitempty"`
+	TotalCostUSD        float64      `json:"total_cost_usd,omitempty"`
 }
 
 // Step represents a single execution step within a run.
@@ -113,9 +115,12 @@ type ArtifactRef struct {
 
 // ModelConfig holds LLM configuration for a run.
 type ModelConfig struct {
-	ModelID     string  `json:"model_id"`
-	Temperature float64 `json:"temperature,omitempty"`
-	MaxTokens   int     `json:"max_tokens,omitempty"`
+	ModelID          string   `json:"model_id"`
+	Temperature      float64  `json:"temperature,omitempty"`
+	MaxTokens        int      `json:"max_tokens,omitempty"`
+	PolicyMode       string   `json:"policy_mode,omitempty"`
+	CostCapUSD       float64  `json:"cost_cap_usd,omitempty"`
+	FallbackModelIDs []string `json:"fallback_model_ids,omitempty"`
 }
 
 // Connection represents a WebSocket connection.
@@ -131,9 +136,13 @@ type Connection struct {
 
 // SQSMessage is the pointer message sent via the task queue.
 type SQSMessage struct {
-	TenantID    string `json:"tenant_id"`
-	TaskID      string `json:"task_id"`
-	RunID       string `json:"run_id"`
-	SubmittedAt int64  `json:"submitted_at"`
-	Attempt     int    `json:"attempt"`
+	TenantID        string  `json:"tenant_id"`
+	TaskID          string  `json:"task_id"`
+	RunID           string  `json:"run_id"`
+	TaskType        string  `json:"task_type,omitempty"`
+	SubmittedAt     int64   `json:"submitted_at"`
+	Attempt         int     `json:"attempt"`
+	DedupeKey       string  `json:"dedupe_key,omitempty"`
+	EstimatedTokens int64   `json:"estimated_tokens,omitempty"`
+	EstimatedCost   float64 `json:"estimated_cost_usd,omitempty"`
 }

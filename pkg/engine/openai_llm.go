@@ -92,7 +92,13 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req *LLMRequest) (*LL
 	if err := json.Unmarshal(respBody, &completion); err != nil {
 		return nil, fmt.Errorf("engine: openai client: decode response: %w", err)
 	}
-	return completionToLLMResponse(&completion)
+	resp, err := completionToLLMResponse(&completion)
+	if err != nil {
+		return nil, err
+	}
+	resp.ModelID = requestBody.Model
+	resp.Provider = llmProviderOpenAI
+	return resp, nil
 }
 
 // ChatStream sends a streaming completion request and pushes token deltas via callback.
@@ -222,6 +228,8 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req *LLMRequest
 		ToolCalls:    toolCalls,
 		TokenUsage:   usage,
 		FinishReason: finishReason,
+		ModelID:      requestBody.Model,
+		Provider:     llmProviderOpenAI,
 	}, nil
 }
 

@@ -35,7 +35,9 @@ func main() {
 
 	svc := task.NewService(store, q)
 	handler := api.NewHandler(svc)
+	handler.SetTenantRuntimeProvider(q)
 	wsHandler := api.NewWSHandler(store, svc)
+	wsHandler.SetReplayPusher(pusher)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)

@@ -495,6 +495,44 @@ func TestListStepsWrongRunID(t *testing.T) {
 	}
 }
 
+func TestGetRunForUser(t *testing.T) {
+	svc, store, _ := newTestService()
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := svc.GetRunForUser(ctx, "tnt_1", "user_1", resp.TaskID, resp.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.RunID != resp.RunID {
+		t.Fatalf("expected run_id %s, got %s", resp.RunID, run.RunID)
+	}
+
+	if _, err := svc.GetRunForUser(ctx, "tnt_1", "user_2", resp.TaskID, resp.RunID); err == nil {
+		t.Fatal("expected error for wrong user")
+	}
+
+	if _, err := svc.GetRunForUser(ctx, "tnt_1", "user_1", resp.TaskID, "run_missing"); err == nil {
+		t.Fatal("expected error for missing run")
+	}
+
+	// Ensure usage fields are wired through store values.
+	if err := store.AddRunUsage(ctx, resp.TaskID, resp.RunID, &model.TokenUsage{Input: 1, Output: 2, Total: 3}, 0.01); err != nil {
+		t.Fatal(err)
+	}
+	run, err = svc.GetRunForUser(ctx, "tnt_1", "user_1", resp.TaskID, resp.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.TotalTokenUsage == nil || run.TotalTokenUsage.Total != 3 {
+		t.Fatalf("expected run usage total=3, got %+v", run.TotalTokenUsage)
+	}
+}
+
 func TestListStepsCrossTaskRun(t *testing.T) {
 	svc, store, _ := newTestService()
 	ctx := context.Background()

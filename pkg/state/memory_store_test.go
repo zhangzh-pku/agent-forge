@@ -384,6 +384,94 @@ func TestPutAndGetRun(t *testing.T) {
 	}
 }
 
+func TestAddRunUsage(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	run := &model.Run{TaskID: "task_1", RunID: "run_1", TenantID: "tnt_1", Status: model.RunStatusRunning}
+	if err := s.PutRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.AddRunUsage(ctx, "task_1", "run_1", &model.TokenUsage{Input: 10, Output: 20, Total: 30}, 0.12); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRunUsage(ctx, "task_1", "run_1", &model.TokenUsage{Input: 1, Output: 2, Total: 3}, 0.01); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetRun(ctx, "task_1", "run_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TotalTokenUsage == nil || got.TotalTokenUsage.Total != 33 {
+		t.Fatalf("expected total tokens 33, got %+v", got.TotalTokenUsage)
+	}
+	if got.TotalCostUSD < 0.1299 || got.TotalCostUSD > 0.1301 {
+		t.Fatalf("expected total cost about 0.13, got %f", got.TotalCostUSD)
+	}
+}
+
+func TestResetRunToQueued(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	run := &model.Run{
+		TaskID:    "task_1",
+		RunID:     "run_1",
+		Status:    model.RunStatusRunning,
+		StartedAt: &now,
+		EndedAt:   &now,
+	}
+	if err := s.PutRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResetRunToQueued(ctx, "task_1", "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRun(ctx, "task_1", "run_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != model.RunStatusQueued {
+		t.Fatalf("expected RUN_QUEUED, got %s", got.Status)
+	}
+	if got.StartedAt != nil || got.EndedAt != nil {
+		t.Fatal("expected started_at and ended_at cleared")
+	}
+}
+
+func TestListTasksAndRuns(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = s.PutTask(ctx, &model.Task{TaskID: "task_a", TenantID: "t1", Status: model.TaskStatusQueued, CreatedAt: now, UpdatedAt: now})
+	_ = s.PutTask(ctx, &model.Task{TaskID: "task_b", TenantID: "t1", Status: model.TaskStatusRunning, CreatedAt: now.Add(time.Second), UpdatedAt: now})
+	_ = s.PutTask(ctx, &model.Task{TaskID: "task_c", TenantID: "t2", Status: model.TaskStatusRunning, CreatedAt: now.Add(2 * time.Second), UpdatedAt: now})
+
+	tasks, err := s.ListTasks(ctx, "t1", []model.TaskStatus{model.TaskStatusRunning}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].TaskID != "task_b" {
+		t.Fatalf("unexpected task list: %+v", tasks)
+	}
+
+	_ = s.PutRun(ctx, &model.Run{TaskID: "task_a", RunID: "run_1", TenantID: "t1", Status: model.RunStatusQueued})
+	_ = s.PutRun(ctx, &model.Run{TaskID: "task_b", RunID: "run_2", TenantID: "t1", Status: model.RunStatusRunning})
+	_ = s.PutRun(ctx, &model.Run{TaskID: "task_c", RunID: "run_3", TenantID: "t2", Status: model.RunStatusRunning})
+
+	runs, err := s.ListRuns(ctx, "t1", []model.RunStatus{model.RunStatusRunning}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].RunID != "run_2" {
+		t.Fatalf("unexpected run list: %+v", runs)
+	}
+}
+
 func TestPutRunDuplicate(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
@@ -649,7 +737,7 @@ func TestDeepCloneModelConfig(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	mc := &model.ModelConfig{ModelID: "gpt-4", Temperature: 0.7, MaxTokens: 4096}
+	mc := &model.ModelConfig{ModelID: "gpt-4", Temperature: 0.7, MaxTokens: 4096, FallbackModelIDs: []string{"gpt-4o-mini"}}
 	task := &model.Task{
 		TaskID:      "task_dc",
 		TenantID:    "tnt_1",
@@ -663,6 +751,7 @@ func TestDeepCloneModelConfig(t *testing.T) {
 	// Mutate the original ModelConfig.
 	mc.ModelID = "gpt-3.5"
 	mc.MaxTokens = 1
+	mc.FallbackModelIDs[0] = "other"
 
 	// Stored copy should be unaffected.
 	got, _ := s.GetTask(ctx, "task_dc")
@@ -671,6 +760,9 @@ func TestDeepCloneModelConfig(t *testing.T) {
 	}
 	if got.ModelConfig.MaxTokens != 4096 {
 		t.Fatalf("expected 4096, got %d — shallow copy leak", got.ModelConfig.MaxTokens)
+	}
+	if len(got.ModelConfig.FallbackModelIDs) != 1 || got.ModelConfig.FallbackModelIDs[0] != "gpt-4o-mini" {
+		t.Fatalf("expected deep-copied fallback model IDs, got %+v", got.ModelConfig.FallbackModelIDs)
 	}
 
 	// Also mutating the returned clone should not affect the store.
@@ -696,5 +788,46 @@ func TestTaskMutationReturnsClone(t *testing.T) {
 	got2, _ := s.GetTask(ctx, "task_1")
 	if got2.Status != model.TaskStatusQueued {
 		t.Fatal("store mutation via returned clone")
+	}
+}
+
+func TestEventReplayAndCompaction(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	now := time.Now().Unix()
+	for i := int64(1); i <= 5; i++ {
+		if err := s.PutEvent(ctx, &model.StreamEvent{
+			TaskID: "task_1",
+			RunID:  "run_1",
+			Seq:    i,
+			TS:     now + i,
+			Type:   model.StreamEventStepEnd,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := s.ReplayEvents(ctx, "task_1", "run_1", 2, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events from seq>2, got %d", len(events))
+	}
+	if events[0].Seq != 3 {
+		t.Fatalf("expected first seq 3, got %d", events[0].Seq)
+	}
+
+	removed, err := s.CompactEvents(ctx, "task_1", "run_1", now+4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 3 {
+		t.Fatalf("expected 3 compacted events, got %d", removed)
+	}
+	events, _ = s.ReplayEvents(ctx, "task_1", "run_1", 0, 0, 10)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events after compaction, got %d", len(events))
 	}
 }

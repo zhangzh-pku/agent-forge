@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/state"
+	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/task"
 )
 
@@ -14,12 +15,18 @@ import (
 type WSHandler struct {
 	connStore state.ConnectionStore
 	taskSvc   *task.Service
+	pusher    stream.Pusher
 }
 
 // NewWSHandler creates a new WebSocket handler.
 // taskSvc is used to validate that the requesting tenant owns the task being subscribed to.
 func NewWSHandler(connStore state.ConnectionStore, taskSvc *task.Service) *WSHandler {
 	return &WSHandler{connStore: connStore, taskSvc: taskSvc}
+}
+
+// SetReplayPusher sets the pusher used for reconnect gap replay.
+func (h *WSHandler) SetReplayPusher(pusher stream.Pusher) {
+	h.pusher = pusher
 }
 
 // RegisterRoutes registers WebSocket management routes.
@@ -35,6 +42,8 @@ func (h *WSHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		ConnectionID string `json:"connection_id"`
 		TaskID       string `json:"task_id"`
 		RunID        string `json:"run_id"`
+		LastSeq      int64  `json:"last_seq,omitempty"`
+		FromTS       int64  `json:"from_ts,omitempty"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -70,7 +79,27 @@ func (h *WSHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+	// On reconnect, replay missed events (seq > last_seq) before resuming live stream.
+	replayed := 0
+	if h.taskSvc != nil && body.TaskID != "" && body.RunID != "" {
+		events, err := h.taskSvc.ReplayEventsForUser(r.Context(), tenant.TenantID, tenant.UserID, body.TaskID, body.RunID, body.LastSeq, body.FromTS, 2000)
+		if err == nil {
+			for _, ev := range events {
+				if body.LastSeq > 0 && ev.Seq <= body.LastSeq {
+					continue
+				}
+				if h.pusher != nil {
+					alive, pushErr := h.pusher.Push(r.Context(), body.ConnectionID, ev)
+					if pushErr != nil || !alive {
+						break
+					}
+				}
+				replayed++
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "connected", "replayed": replayed})
 }
 
 func (h *WSHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) {

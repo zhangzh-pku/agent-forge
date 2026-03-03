@@ -312,6 +312,55 @@ workspace state.
 
 **Response:** `200 OK` with the new Task state and Run.
 
+### GET /tasks/{task_id}/runs/{run_id}
+
+Retrieve run-level metadata including cumulative token/cost attribution.
+
+### GET /tasks/{task_id}/runs/{run_id}/events/replay
+
+Replay persisted stream events for reconnect/missed-event recovery.
+
+Query params:
+- `from_seq` (optional): replay `seq > from_seq`
+- `from_ts` (optional): replay events newer than timestamp
+- `limit` (optional, default 200, max 2000)
+
+### POST /tasks/{task_id}/runs/{run_id}/events/compact
+
+Compact old replay events.
+
+```json
+{
+  "before_ts": 1710500000
+}
+```
+
+### GET /tenants/{tenant_id}/runtime
+
+Get tenant-level runtime metrics (queued/running counts, budget usage,
+breaker state, retries, DLQ counters).
+
+### GET /tenants/{tenant_id}/alerts
+
+Get tenant-level runtime alerts (queue-depth, rate-limit, budget, breaker).
+
+## Multi-Tenant Controls
+
+Memory queue scheduling now includes:
+
+- Per-tenant queued and running concurrency limits.
+- Round-robin fairness across tenants.
+- Per-tenant token/cost budget admission with reservations.
+- Hard circuit breakers for rate/error/budget breach with cooldown recovery.
+- Retry/idempotency/DLQ handling and dead-letter re-drive hooks.
+
+Model routing now includes:
+
+- Task-type aware model selection.
+- Provider/model fallback chains.
+- Policy modes: `latency-first`, `quality-first`, `cost-cap`.
+- Per-run token/cost attribution.
+
 ## Domain Model
 
 | Entity | Description |

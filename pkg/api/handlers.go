@@ -10,6 +10,7 @@ import (
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/task"
+	"github.com/agentforge/agentforge/pkg/tenant"
 )
 
 // maxRequestBodySize is the maximum allowed request body size (1 MB).
@@ -17,7 +18,14 @@ const maxRequestBodySize = 1 << 20
 
 // Handler holds HTTP handler dependencies.
 type Handler struct {
-	svc *task.Service
+	svc           *task.Service
+	tenantRuntime TenantRuntimeProvider
+}
+
+// TenantRuntimeProvider exposes tenant-level runtime metrics and alerts.
+type TenantRuntimeProvider interface {
+	TenantSnapshot(tenantID string) tenant.RuntimeSnapshot
+	TenantAlerts(tenantID string, limit int) []tenant.Alert
 }
 
 // NewHandler creates a new API handler.
@@ -25,10 +33,16 @@ func NewHandler(svc *task.Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// SetTenantRuntimeProvider wires tenant runtime metrics/alerts into the API.
+func (h *Handler) SetTenantRuntimeProvider(provider TenantRuntimeProvider) {
+	h.tenantRuntime = provider
+}
+
 // RegisterRoutes registers all API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/tasks", AuthMiddleware(http.HandlerFunc(h.handleTasks)))
 	mux.Handle("/tasks/", AuthMiddleware(http.HandlerFunc(h.handleTaskByID)))
+	mux.Handle("/tenants/", AuthMiddleware(http.HandlerFunc(h.handleTenantByID)))
 }
 
 func (h *Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -75,8 +89,47 @@ func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "runs":
+		if len(parts) == 3 && r.Method == http.MethodGet {
+			h.getRun(w, r, taskID, parts[2])
+			return
+		}
+		if len(parts) >= 5 && parts[3] == "events" && parts[4] == "replay" && r.Method == http.MethodGet {
+			h.replayEvents(w, r, taskID, parts[2])
+			return
+		}
+		if len(parts) >= 5 && parts[3] == "events" && parts[4] == "compact" && r.Method == http.MethodPost {
+			h.compactEvents(w, r, taskID, parts[2])
+			return
+		}
 		if len(parts) >= 4 && parts[3] == "steps" && r.Method == http.MethodGet {
 			h.listSteps(w, r, taskID, parts[2])
+			return
+		}
+	}
+
+	http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+}
+
+func (h *Handler) handleTenantByID(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /tenants/{tenant_id}/runtime or /tenants/{tenant_id}/alerts
+	path := strings.TrimPrefix(r.URL.Path, "/tenants/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) < 2 || parts[0] == "" {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+
+	tenantID := parts[0]
+	switch parts[1] {
+	case "runtime":
+		if r.Method == http.MethodGet {
+			h.getTenantRuntime(w, r, tenantID)
+			return
+		}
+	case "alerts":
+		if r.Method == http.MethodGet {
+			h.getTenantAlerts(w, r, tenantID)
 			return
 		}
 	}
@@ -236,6 +289,100 @@ func (h *Handler) listSteps(w http.ResponseWriter, r *http.Request, taskID, runI
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"steps": steps})
+}
+
+func (h *Handler) getRun(w http.ResponseWriter, r *http.Request, taskID, runID string) {
+	tenant := GetTenant(r.Context())
+	run, err := h.svc.GetRunForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID, runID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func (h *Handler) replayEvents(w http.ResponseWriter, r *http.Request, taskID, runID string) {
+	tenant := GetTenant(r.Context())
+	fromSeq, _ := strconv.ParseInt(r.URL.Query().Get("from_seq"), 10, 64)
+	fromTS, _ := strconv.ParseInt(r.URL.Query().Get("from_ts"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	events, err := h.svc.ReplayEventsForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID, runID, fromSeq, fromTS, limit)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task or run not found"})
+			return
+		}
+		writeInternalError(w, tenant.RequestID)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"events": events})
+}
+
+func (h *Handler) compactEvents(w http.ResponseWriter, r *http.Request, taskID, runID string) {
+	tenant := GetTenant(r.Context())
+	var body struct {
+		BeforeTS int64 `json:"before_ts"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	removed, err := h.svc.CompactRunEventsForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID, runID, body.BeforeTS)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task or run not found"})
+			return
+		}
+		writeInternalError(w, tenant.RequestID)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"removed": removed})
+}
+
+func (h *Handler) getTenantRuntime(w http.ResponseWriter, r *http.Request, tenantID string) {
+	tenantCtx := GetTenant(r.Context())
+	if tenantCtx.TenantID != tenantID {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+	if h.tenantRuntime == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "tenant runtime metrics not configured"})
+		return
+	}
+	snap := h.tenantRuntime.TenantSnapshot(tenantID)
+	if snap.TenantID == "" {
+		snap.TenantID = tenantID
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (h *Handler) getTenantAlerts(w http.ResponseWriter, r *http.Request, tenantID string) {
+	tenantCtx := GetTenant(r.Context())
+	if tenantCtx.TenantID != tenantID {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+	if h.tenantRuntime == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "tenant alerts not configured"})
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"alerts": h.tenantRuntime.TenantAlerts(tenantID, limit),
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, data interface{}) {

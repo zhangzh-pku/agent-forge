@@ -432,3 +432,82 @@ Emitted when the engine encounters a fatal error (e.g., LLM failure, max steps r
   }
 }
 ```
+
+---
+
+## Additional Runtime Endpoints
+
+### GET /tasks/{task_id}/runs/{run_id}
+
+Returns run-level metadata including cumulative token and cost attribution.
+
+**Response** `200 OK`
+
+```json
+{
+  "task_id": "task_a1b2c3d4",
+  "run_id": "run_e5f6g7h8",
+  "status": "SUCCEEDED",
+  "last_step_index": 8,
+  "total_token_usage": {
+    "input": 1200,
+    "output": 900,
+    "total": 2100
+  },
+  "total_cost_usd": 0.00735
+}
+```
+
+### GET /tasks/{task_id}/runs/{run_id}/events/replay?from_seq=100&from_ts=1710500400&limit=200
+
+Replays persisted stream events for reconnect and missed-event recovery.
+
+**Behavior**
+- `from_seq`: returns events with `seq > from_seq`
+- `from_ts`: optional lower-bound timestamp
+- `limit`: max events returned (default 200, max 2000)
+
+### POST /tasks/{task_id}/runs/{run_id}/events/compact
+
+Compacts old persisted events for the run.
+
+**Request**
+
+```json
+{
+  "before_ts": 1710500000
+}
+```
+
+**Response**
+
+```json
+{
+  "removed": 42
+}
+```
+
+### GET /tenants/{tenant_id}/runtime
+
+Returns tenant runtime counters used for multi-tenant scheduling and isolation.
+
+### GET /tenants/{tenant_id}/alerts?limit=50
+
+Returns recent tenant alerts (queue depth, rate limiting, budget breach, breaker transitions).
+
+---
+
+## WebSocket Reconnect Replay
+
+`POST /ws/connect` supports replay hints:
+
+```json
+{
+  "connection_id": "conn_123",
+  "task_id": "task_a1b2c3d4",
+  "run_id": "run_e5f6g7h8",
+  "last_seq": 120
+}
+```
+
+On reconnect, AgentForge replays gap events (`seq > last_seq`) before continuing live pushes.

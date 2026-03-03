@@ -343,3 +343,75 @@ func TestFullLoopWithResume(t *testing.T) {
 	}
 	t.Logf("Resume run has %d steps", len(steps))
 }
+
+func TestDisconnectReconnectReplayRecovery(t *testing.T) {
+	store := state.NewMemoryStore()
+	artifacts := artstore.NewMemoryStore()
+	q := queue.NewMemoryQueue(100)
+	pusher := stream.NewMockPusher()
+	llm := NewMockLLMClient(2)
+
+	svc := task.NewService(store, q)
+	handler := api.NewHandler(svc)
+	wsHandler := api.NewWSHandler(store, svc)
+	wsHandler.SetReplayPusher(pusher)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+	wsHandler.RegisterRoutes(mux)
+
+	// Create task.
+	body, _ := json.Marshal(map[string]string{"prompt": "replay test"})
+	req := httptest.NewRequest("POST", "/tasks", bytes.NewReader(body))
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d", rr.Code)
+	}
+	var createResp struct {
+		TaskID string `json:"task_id"`
+		RunID  string `json:"run_id"`
+	}
+	_ = json.NewDecoder(rr.Body).Decode(&createResp)
+
+	// Execute task with no active WS connection.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	worker := NewWorker(store, artifacts, q, llm, NewRegistry(), pusher, DefaultEngineConfig())
+	go q.StartConsumer(ctx, worker.handleMessage)
+	waitForTaskStatus(t, store, createResp.TaskID, model.TaskStatusSucceeded, 3*time.Second)
+	cancel()
+
+	// Reconnect from seq=0 should replay persisted events.
+	connectBody, _ := json.Marshal(map[string]interface{}{
+		"connection_id": "conn_replay",
+		"task_id":       createResp.TaskID,
+		"run_id":        createResp.RunID,
+		"last_seq":      0,
+	})
+	req = httptest.NewRequest("POST", "/ws/connect", bytes.NewReader(connectBody))
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ws connect: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	events := pusher.Events()
+	if len(events) == 0 {
+		t.Fatal("expected replayed events on reconnect")
+	}
+	foundComplete := false
+	for _, ev := range events {
+		if ev.ConnectionID == "conn_replay" && ev.Event.Type == model.StreamEventComplete {
+			foundComplete = true
+			break
+		}
+	}
+	if !foundComplete {
+		t.Fatal("expected replayed complete event for reconnecting client")
+	}
+}
