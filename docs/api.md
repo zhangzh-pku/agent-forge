@@ -2,11 +2,14 @@
 
 ## Authentication
 
-All REST endpoints require the `X-Tenant-Id` header. The `X-User-Id` header is optional and defaults to `"anonymous"` if omitted.
+All REST endpoints require authenticated tenant + user identity.
+
+- Header mode (local/dev): `X-Tenant-Id`, `X-User-Id`
+- Trusted mode (aws recommended): `X-Authenticated-Tenant-Id`, `X-Authenticated-User-Id`
 
 ```
-X-Tenant-Id: tenant_abc    (required)
-X-User-Id: user_01          (optional)
+X-Tenant-Id: tenant_abc    (required in header mode)
+X-User-Id: user_01          (required in header mode)
 ```
 
 Authentication is enforced by `AuthMiddleware` in `pkg/api/middleware.go`. The current implementation uses simple header extraction; it is designed to be replaceable with JWT or IAM-based authentication.
@@ -24,7 +27,7 @@ Create a new agent task. Returns immediately after persisting the task and enque
 | Header           | Required | Description |
 |------------------|----------|-------------|
 | `X-Tenant-Id`    | Yes      | Tenant identifier. |
-| `X-User-Id`      | No       | User identifier. Defaults to `"anonymous"`. |
+| `X-User-Id`      | Yes      | User identifier (header mode). |
 | `Idempotency-Key`| No       | Idempotency key (alternative to body field). |
 
 **Request Body**

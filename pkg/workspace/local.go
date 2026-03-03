@@ -49,10 +49,6 @@ func (m *LocalManager) Root() string { return m.cfg.Root }
 func (m *LocalManager) safePath(rel string) (string, error) {
 	cleaned := filepath.Clean(rel)
 	if filepath.IsAbs(cleaned) {
-		// Allow if it's already under root.
-		if strings.HasPrefix(cleaned, m.cfg.Root+string(os.PathSeparator)) || cleaned == m.cfg.Root {
-			return cleaned, nil
-		}
 		return "", ErrPathTraversal
 	}
 	abs := filepath.Join(m.cfg.Root, cleaned)
@@ -60,7 +56,41 @@ func (m *LocalManager) safePath(rel string) (string, error) {
 	if !strings.HasPrefix(abs, m.cfg.Root+string(os.PathSeparator)) && abs != m.cfg.Root {
 		return "", ErrPathTraversal
 	}
+	// Defense in depth: reject any existing symlink path components.
+	if err := m.ensureNoSymlink(abs); err != nil {
+		return "", err
+	}
 	return abs, nil
+}
+
+// ensureNoSymlink rejects paths that traverse any symlink component currently
+// present under the workspace root.
+func (m *LocalManager) ensureNoSymlink(abs string) error {
+	if abs == m.cfg.Root {
+		return nil
+	}
+	rel, err := filepath.Rel(m.cfg.Root, abs)
+	if err != nil {
+		return ErrPathTraversal
+	}
+	cur := m.cfg.Root
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, statErr := os.Lstat(cur)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("workspace: lstat: %w", statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return ErrPathTraversal
+		}
+	}
+	return nil
 }
 
 func (m *LocalManager) Write(_ context.Context, path string, content []byte) error {

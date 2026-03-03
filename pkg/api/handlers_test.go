@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -599,6 +600,9 @@ func TestResumeTaskInvalidStep(t *testing.T) {
 	})
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid step, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "checkpoint") || strings.Contains(rr.Body.String(), "step not found") {
+		t.Fatalf("expected sanitized error message, got %s", rr.Body.String())
 	}
 }
 

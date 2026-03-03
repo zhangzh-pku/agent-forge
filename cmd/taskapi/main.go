@@ -17,6 +17,7 @@ import (
 	artstore "github.com/agentforge/agentforge/pkg/artifact"
 	appcfg "github.com/agentforge/agentforge/pkg/config"
 	"github.com/agentforge/agentforge/pkg/engine"
+	"github.com/agentforge/agentforge/pkg/ops"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
@@ -69,6 +70,33 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	recoveryCfg, err := appcfg.LoadRecoveryRuntimeConfigFromEnv()
+	if err != nil {
+		log.Fatalf("failed to load recovery config: %v", err)
+	}
+	if recoveryCfg.Enabled {
+		recoveryScheduler := ops.NewScheduler(store, q, ops.SchedulerConfig{
+			Interval:          recoveryCfg.Interval,
+			StaleFor:          recoveryCfg.StaleFor,
+			Limit:             recoveryCfg.Limit,
+			TenantID:          recoveryCfg.TenantID,
+			ConsistencyCheck:  recoveryCfg.ConsistencyCheck,
+			ConsistencyRepair: recoveryCfg.ConsistencyRepair,
+		})
+		go func() {
+			log.Printf(
+				"Recovery scheduler enabled (interval=%s, stale_for=%s, limit=%d, tenant=%q, consistency_check=%t, consistency_repair=%t)",
+				recoveryCfg.Interval,
+				recoveryCfg.StaleFor,
+				recoveryCfg.Limit,
+				recoveryCfg.TenantID,
+				recoveryCfg.ConsistencyCheck,
+				recoveryCfg.ConsistencyRepair,
+			)
+			recoveryScheduler.Start(ctx)
+		}()
+	}
 
 	if embeddedWorker {
 		llm, err := engine.NewLLMClientFromEnv()

@@ -6,6 +6,8 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -57,6 +59,37 @@ func TestPathTraversal(t *testing.T) {
 	err = m.Write(ctx, "foo/../../escape.txt", []byte("evil"))
 	if err != ErrPathTraversal {
 		t.Fatalf("expected ErrPathTraversal, got %v", err)
+	}
+}
+
+func TestSymlinkTraversalBlocked(t *testing.T) {
+	m := newTestWorkspace(t)
+	ctx := context.Background()
+
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	linkPath := filepath.Join(m.Root(), "link.txt")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	if _, err := m.Read(ctx, "link.txt"); err != ErrPathTraversal {
+		t.Fatalf("expected ErrPathTraversal on read via symlink, got %v", err)
+	}
+	if err := m.Write(ctx, "link.txt", []byte("blocked")); err != ErrPathTraversal {
+		t.Fatalf("expected ErrPathTraversal on write via symlink, got %v", err)
+	}
+
+	linkDir := filepath.Join(m.Root(), "linked_dir")
+	if err := os.Symlink(outsideDir, linkDir); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+	if err := m.Write(ctx, "linked_dir/new.txt", []byte("blocked")); err != ErrPathTraversal {
+		t.Fatalf("expected ErrPathTraversal on write through symlink dir, got %v", err)
 	}
 }
 

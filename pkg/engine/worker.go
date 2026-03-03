@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/model"
@@ -151,33 +152,20 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	result, err := eng.Execute(ctx, task, run, ws)
 	if err != nil {
 		log.Error("worker: engine error", map[string]interface{}{"error": err.Error()})
-		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
-			log.Error("worker: failed to complete run after engine error", map[string]interface{}{"error": completeErr.Error()})
-		}
-		if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
-			[]model.TaskStatus{model.TaskStatusRunning},
-			model.TaskStatusFailed); updateErr != nil {
-			log.Error("worker: failed to update task status after engine error", map[string]interface{}{"error": updateErr.Error()})
+		if finalizeErr := w.finalizeRun(msg.TaskID, msg.RunID, model.RunStatusFailed); finalizeErr != nil {
+			log.Error("worker: failed to persist FAILED terminal state after engine error", map[string]interface{}{"error": finalizeErr.Error()})
+			return finalizeErr
 		}
 		return nil // Ack — don't retry engine failures.
 	}
 
 	// Step 6: Finalize.
-	if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, result.Status); completeErr != nil {
-		log.Error("worker: failed to complete run", map[string]interface{}{"error": completeErr.Error()})
-	}
-
-	taskStatus := model.TaskStatusSucceeded
-	switch result.Status {
-	case model.RunStatusFailed:
-		taskStatus = model.TaskStatusFailed
-	case model.RunStatusAborted:
-		taskStatus = model.TaskStatusAborted
-	}
-	if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
-		[]model.TaskStatus{model.TaskStatusRunning},
-		taskStatus); updateErr != nil {
-		log.Error("worker: failed to update task status on finalize", map[string]interface{}{"error": updateErr.Error()})
+	if finalizeErr := w.finalizeRun(msg.TaskID, msg.RunID, result.Status); finalizeErr != nil {
+		log.Error("worker: failed to persist terminal state", map[string]interface{}{
+			"error":  finalizeErr.Error(),
+			"status": string(result.Status),
+		})
+		return finalizeErr
 	}
 
 	log.Info("worker: execution complete", map[string]interface{}{
@@ -185,5 +173,33 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		"last_step": result.LastStep,
 	})
 
+	return nil
+}
+
+func (w *Worker) finalizeRun(taskID, runID string, runStatus model.RunStatus) error {
+	finalizeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := w.store.CompleteRun(finalizeCtx, taskID, runID, runStatus); err != nil {
+		return fmt.Errorf("worker: finalize complete run: %w", err)
+	}
+
+	taskStatus := model.TaskStatusSucceeded
+	switch runStatus {
+	case model.RunStatusFailed:
+		taskStatus = model.TaskStatusFailed
+	case model.RunStatusAborted:
+		taskStatus = model.TaskStatusAborted
+	}
+	if err := w.store.UpdateTaskStatusForRun(finalizeCtx, taskID, runID,
+		[]model.TaskStatus{model.TaskStatusRunning},
+		taskStatus); err != nil {
+		// Conflict/not-found can happen when active run moved (resume/recovery). In
+		// this case terminal run status is already persisted, so don't force retries.
+		if errors.Is(err, state.ErrConflict) || errors.Is(err, state.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("worker: finalize update task status: %w", err)
+	}
 	return nil
 }

@@ -4,6 +4,8 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentforge/agentforge/pkg/model"
@@ -55,6 +57,9 @@ type Service struct {
 	queue queue.Queue
 }
 
+// ErrValidation indicates request-level validation failures in task service APIs.
+var ErrValidation = errors.New("validation error")
+
 // NewService creates a new task service.
 func NewService(store state.Store, q queue.Queue) *Service {
 	return &Service{store: store, queue: q}
@@ -62,6 +67,19 @@ func NewService(store state.Store, q queue.Queue) *Service {
 
 // Create creates a new task and its first run, then enqueues it.
 func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateResponse, error) {
+	if req == nil {
+		return nil, validationError("request is required")
+	}
+	if strings.TrimSpace(req.TenantID) == "" {
+		return nil, validationError("tenant_id is required")
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		return nil, validationError("user_id is required")
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		return nil, validationError("prompt is required")
+	}
+
 	// Check idempotency.
 	if req.IdempotencyKey != "" {
 		existing, err := s.store.GetTaskByIdempotencyKey(ctx, req.TenantID, req.IdempotencyKey)
@@ -129,6 +147,7 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		EstimatedTokens: estimatedTokens,
 		EstimatedCost:   estimatedCost,
 	}); err != nil {
+		s.markRunAndTaskFailed(taskID, runID)
 		return nil, err
 	}
 
@@ -137,25 +156,45 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 
 // Get retrieves task metadata.
 func (s *Service) Get(ctx context.Context, tenantID, taskID string) (*model.Task, error) {
-	return s.GetForUser(ctx, tenantID, "", taskID)
+	taskObj, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasTaskTenantAccess(taskObj, tenantID) {
+		return nil, state.ErrNotFound
+	}
+	return taskObj, nil
 }
 
 // GetForUser retrieves task metadata and validates tenant/user access.
 func (s *Service) GetForUser(ctx context.Context, tenantID, userID, taskID string) (*model.Task, error) {
-	task, err := s.store.GetTask(ctx, taskID)
+	taskObj, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	if !hasTaskAccess(task, tenantID, userID) {
+	if !hasTaskAccess(taskObj, tenantID, userID) {
 		return nil, state.ErrNotFound
 	}
-	return task, nil
+	return taskObj, nil
 }
 
 // Abort marks a task for abortion.
 func (s *Service) Abort(ctx context.Context, tenantID, taskID string, req *AbortRequest) (*model.Task, error) {
 	if req == nil {
 		req = &AbortRequest{TenantID: tenantID}
+	}
+	if req.UserID == "" {
+		taskObj, err := s.store.GetTask(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if !hasTaskTenantAccess(taskObj, tenantID) {
+			return nil, state.ErrNotFound
+		}
+		if err := s.store.SetAbortRequested(ctx, taskID, req.Reason); err != nil {
+			return nil, err
+		}
+		return s.store.GetTask(ctx, taskID)
 	}
 	return s.AbortForUser(ctx, tenantID, req.UserID, taskID, req)
 }
@@ -179,6 +218,15 @@ func (s *Service) AbortForUser(ctx context.Context, tenantID, userID, taskID str
 
 // Resume creates a new run from a checkpoint and enqueues it.
 func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest) (*ResumeResponse, error) {
+	if req == nil {
+		return nil, validationError("request is required")
+	}
+	if strings.TrimSpace(req.TenantID) == "" {
+		return nil, validationError("tenant_id is required")
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		return nil, validationError("user_id is required")
+	}
 	task, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -188,25 +236,25 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 	}
 
 	if req.FromRunID == "" {
-		return nil, errors.New("from_run_id is required for resume")
+		return nil, validationError("from_run_id is required for resume")
 	}
 
 	if req.FromStepIndex < 0 {
-		return nil, errors.New("from_step_index must be non-negative")
+		return nil, validationError("from_step_index must be non-negative")
 	}
 
 	// Validate that from_run_id belongs to this task.
 	if _, err := s.store.GetRun(ctx, taskID, req.FromRunID); err != nil {
-		return nil, errors.New("from_run_id not found for this task")
+		return nil, validationError("from_run_id not found for this task")
 	}
 
 	// Validate that the step exists and has a checkpoint.
 	step, err := s.store.GetStep(ctx, req.FromRunID, req.FromStepIndex)
 	if err != nil {
-		return nil, errors.New("checkpoint step not found: cannot resume from a step that does not exist")
+		return nil, validationError("checkpoint step not found: cannot resume from a step that does not exist")
 	}
 	if step.CheckpointRef == nil {
-		return nil, errors.New("checkpoint step has no checkpoint data: cannot resume")
+		return nil, validationError("checkpoint step has no checkpoint data: cannot resume")
 	}
 
 	now := time.Now().UTC()
@@ -250,10 +298,7 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 		EstimatedTokens: estimatedTokens,
 		EstimatedCost:   estimatedCost,
 	}); err != nil {
-		// Keep state consistent if enqueue fails: mark the new run/task as failed
-		// instead of leaving them stuck in QUEUED forever.
-		_ = s.store.CompleteRun(ctx, taskID, newRunID, model.RunStatusFailed)
-		_ = s.store.UpdateTaskStatusForRun(ctx, taskID, newRunID, []model.TaskStatus{model.TaskStatusQueued}, model.TaskStatusFailed)
+		s.markRunAndTaskFailed(taskID, newRunID)
 		return nil, err
 	}
 
@@ -262,7 +307,17 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 
 // ListSteps retrieves steps for a run with pagination.
 func (s *Service) ListSteps(ctx context.Context, tenantID, taskID, runID string, from, limit int) ([]*model.Step, error) {
-	return s.ListStepsForUser(ctx, tenantID, "", taskID, runID, from, limit)
+	taskObj, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasTaskTenantAccess(taskObj, tenantID) {
+		return nil, state.ErrNotFound
+	}
+	if _, err := s.store.GetRun(ctx, taskID, runID); err != nil {
+		return nil, state.ErrNotFound
+	}
+	return s.store.ListSteps(ctx, runID, from, limit)
 }
 
 // GetRunForUser retrieves run metadata with tenant/user access validation.
@@ -329,12 +384,38 @@ func (s *Service) ListStepsForUser(ctx context.Context, tenantID, userID, taskID
 }
 
 func hasTaskAccess(task *model.Task, tenantID, userID string) bool {
-	if task.TenantID != tenantID {
+	if !hasTaskTenantAccess(task, tenantID) {
 		return false
 	}
-	// Allow legacy callers without user scope, but enforce user isolation when provided.
-	if userID != "" && task.UserID != "" && task.UserID != userID {
+	if strings.TrimSpace(userID) == "" {
 		return false
 	}
-	return true
+	if strings.TrimSpace(task.UserID) == "" {
+		return false
+	}
+	return task.UserID == userID
+}
+
+func hasTaskTenantAccess(task *model.Task, tenantID string) bool {
+	if task == nil {
+		return false
+	}
+	return task.TenantID == tenantID
+}
+
+func validationError(msg string) error {
+	return fmt.Errorf("%w: %s", ErrValidation, msg)
+}
+
+func (s *Service) markRunAndTaskFailed(taskID, runID string) {
+	if taskID == "" || runID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.store.CompleteRun(ctx, taskID, runID, model.RunStatusFailed)
+	_ = s.store.UpdateTaskStatusForRun(ctx, taskID, runID, []model.TaskStatus{
+		model.TaskStatusQueued,
+		model.TaskStatusRunning,
+	}, model.TaskStatusFailed)
 }

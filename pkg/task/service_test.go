@@ -156,6 +156,31 @@ func TestGetTaskWrongUser(t *testing.T) {
 	}
 }
 
+func TestGetTaskMissingUserRejected(t *testing.T) {
+	svc, _, _ := newTestService()
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	_, err := svc.GetForUser(ctx, "tnt_1", "", resp.TaskID)
+	if err == nil {
+		t.Fatal("expected error for missing user")
+	}
+}
+
+func TestCreateTaskRequiresUser(t *testing.T) {
+	svc, _, _ := newTestService()
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, &CreateRequest{
+		TenantID: "tnt_1",
+		UserID:   "",
+		Prompt:   "test prompt",
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
 func TestAbortTask(t *testing.T) {
 	svc, _, _ := newTestService()
 	ctx := context.Background()
@@ -218,6 +243,7 @@ func TestResumeTask(t *testing.T) {
 	// Resume from step 1.
 	resumeResp, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp.RunID,
 		FromStepIndex: 1,
 	})
@@ -271,6 +297,26 @@ func TestResumeWrongUser(t *testing.T) {
 	}
 }
 
+func TestResumeMissingUserRejected(t *testing.T) {
+	svc, store, _ := newTestService()
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	store.ClaimRun(ctx, resp.TaskID, resp.RunID)
+	createStepsWithCheckpoints(ctx, store, resp.RunID, 1)
+	store.CompleteRun(ctx, resp.TaskID, resp.RunID, model.RunStatusSucceeded)
+	store.UpdateTaskStatus(ctx, resp.TaskID, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}, model.TaskStatusSucceeded)
+
+	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
+		TenantID:      "tnt_1",
+		FromRunID:     resp.RunID,
+		FromStepIndex: 0,
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
 func TestResumeEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
 	store := state.NewMemoryStore()
 	createSvc := NewService(store, queue.NewMemoryQueue(10))
@@ -288,6 +334,7 @@ func TestResumeEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
 
 	_, err = svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp.RunID,
 		FromStepIndex: 0,
 	})
@@ -315,6 +362,42 @@ func TestResumeEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
 	}
 }
 
+func TestCreateEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
+	store := state.NewMemoryStore()
+	svc := NewService(store, &failingQueue{})
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, &CreateRequest{
+		TenantID: "tnt_1",
+		UserID:   "user_1",
+		Prompt:   "test",
+	})
+	if err == nil {
+		t.Fatal("expected enqueue error")
+	}
+
+	tasks, err := store.ListTasks(ctx, "tnt_1", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+
+	taskObj := tasks[0]
+	if taskObj.Status != model.TaskStatusFailed {
+		t.Fatalf("expected task FAILED after enqueue failure, got %s", taskObj.Status)
+	}
+
+	run, err := store.GetRun(ctx, taskObj.TaskID, taskObj.ActiveRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.RunStatusFailed {
+		t.Fatalf("expected run FAILED after enqueue failure, got %s", run.Status)
+	}
+}
+
 func TestResumeWithModelConfigOverride(t *testing.T) {
 	svc, store, _ := newTestService()
 	ctx := context.Background()
@@ -329,6 +412,7 @@ func TestResumeWithModelConfigOverride(t *testing.T) {
 	newMC := &model.ModelConfig{ModelID: "claude-3", Temperature: 0.9}
 	resumeResp, _ := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:            "tnt_1",
+		UserID:              "user_1",
 		FromRunID:           resp.RunID,
 		FromStepIndex:       0,
 		ModelConfigOverride: newMC,
@@ -348,6 +432,7 @@ func TestResumeEmptyFromRunID(t *testing.T) {
 
 	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     "",
 		FromStepIndex: 0,
 	})
@@ -371,6 +456,7 @@ func TestResumeWrongTaskRunID(t *testing.T) {
 	// Try to resume task1 using task2's run - should fail.
 	_, err := svc.Resume(ctx, resp1.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp2.RunID,
 		FromStepIndex: 0,
 	})
@@ -387,6 +473,7 @@ func TestResumeNegativeStepIndex(t *testing.T) {
 
 	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp.RunID,
 		FromStepIndex: -1,
 	})
@@ -409,6 +496,7 @@ func TestResumeFromNonexistentStep(t *testing.T) {
 	// Try to resume from step 5, which doesn't exist.
 	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp.RunID,
 		FromStepIndex: 5,
 	})
@@ -432,6 +520,7 @@ func TestResumeClearsAbortFlag(t *testing.T) {
 
 	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp.RunID,
 		FromStepIndex: 0,
 	})
@@ -567,6 +656,7 @@ func TestResumeModelConfigInheritsFromTask(t *testing.T) {
 	// Resume without model_config_override — should inherit from task.
 	resumeResp, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
 		TenantID:      "tnt_1",
+		UserID:        "user_1",
 		FromRunID:     resp.RunID,
 		FromStepIndex: 0,
 	})

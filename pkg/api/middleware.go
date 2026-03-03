@@ -4,6 +4,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/agentforge/agentforge/pkg/util"
 )
@@ -17,6 +19,16 @@ type TenantInfo struct {
 
 type tenantContextKey struct{}
 
+const (
+	authModeHeader  = "header"
+	authModeTrusted = "trusted"
+
+	headerTenantID        = "X-Tenant-Id"
+	headerUserID          = "X-User-Id"
+	headerTrustedTenantID = "X-Authenticated-Tenant-Id"
+	headerTrustedUserID   = "X-Authenticated-User-Id"
+)
+
 // GetTenant extracts TenantInfo from the request context.
 func GetTenant(ctx context.Context) *TenantInfo {
 	info, _ := ctx.Value(tenantContextKey{}).(*TenantInfo)
@@ -24,22 +36,30 @@ func GetTenant(ctx context.Context) *TenantInfo {
 }
 
 // AuthMiddleware extracts tenant/user from headers.
-// v1: simple header-based auth. Designed to be replaceable with JWT/IAM.
+// Modes:
+//   - header: reads X-Tenant-Id / X-User-Id (local/dev only)
+//   - trusted: reads trusted identity headers injected by an upstream authorizer
+//     (X-Authenticated-Tenant-Id / X-Authenticated-User-Id)
+//
+// Mode selection:
+//   - AGENTFORGE_AUTH_MODE=header|trusted
+//   - default: trusted in aws runtime, header otherwise.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tenantID := r.Header.Get("X-Tenant-Id")
-		userID := r.Header.Get("X-User-Id")
+		authMode := effectiveAuthMode()
+		tenantID, userID := extractIdentityFromRequest(r, authMode)
 		requestID := r.Header.Get("X-Request-Id")
 		if requestID == "" {
 			requestID = util.NewID("req_")
 		}
 		w.Header().Set("X-Request-Id", requestID)
 		if tenantID == "" {
-			http.Error(w, `{"error":"missing X-Tenant-Id header","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
+			http.Error(w, `{"error":"missing authenticated tenant identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
 			return
 		}
 		if userID == "" {
-			userID = "anonymous"
+			http.Error(w, `{"error":"missing authenticated user identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
+			return
 		}
 		ctx := context.WithValue(r.Context(), tenantContextKey{}, &TenantInfo{
 			TenantID:  tenantID,
@@ -48,4 +68,27 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func extractIdentityFromRequest(r *http.Request, mode string) (tenantID, userID string) {
+	switch mode {
+	case authModeTrusted:
+		return strings.TrimSpace(r.Header.Get(headerTrustedTenantID)), strings.TrimSpace(r.Header.Get(headerTrustedUserID))
+	default:
+		return strings.TrimSpace(r.Header.Get(headerTenantID)), strings.TrimSpace(r.Header.Get(headerUserID))
+	}
+}
+
+func effectiveAuthMode() string {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFORGE_AUTH_MODE")))
+	switch mode {
+	case authModeHeader:
+		return authModeHeader
+	case authModeTrusted, "trusted_claims", "claims":
+		return authModeTrusted
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("AGENTFORGE_RUNTIME")), "aws") {
+		return authModeTrusted
+	}
+	return authModeHeader
 }

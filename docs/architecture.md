@@ -40,7 +40,10 @@ DynamoDB (metadata) + S3 (artifacts) + WebSocket (real-time events)
 
 ### Task API (`cmd/taskapi`)
 
-The HTTP entry point. Handles task creation, retrieval, abort, resume, and step listing. Authentication is header-based (`X-Tenant-Id`, `X-User-Id`) via `AuthMiddleware`, designed to be replaceable with JWT or IAM.
+The HTTP entry point. Handles task creation, retrieval, abort, resume, and step listing. Authentication supports:
+
+- local/dev `header` mode (`X-Tenant-Id`, `X-User-Id`)
+- production `trusted` mode (`X-Authenticated-Tenant-Id`, `X-Authenticated-User-Id`) injected by an upstream authorizer
 
 - **Package**: `pkg/api` (handlers, middleware, WebSocket handlers)
 - **Package**: `pkg/task` (service layer for lifecycle operations)

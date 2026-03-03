@@ -49,8 +49,8 @@ Agent workspaces are designed to prevent path traversal and unauthorized file ac
 
 ## Dependency Management
 
-- AgentForge v1 uses only the Go standard library and has zero external dependencies.
-- When external dependencies are added, Go module checksums will be verified via `go.sum`.
+- AgentForge currently depends on external modules (for example AWS SDK v2 packages).
+- Go module checksums are verified via `go.sum`.
 - Dependencies should be reviewed before adding. Run `go list -m -json all` to audit the dependency tree.
 - CI pipelines should include `govulncheck` to detect known vulnerabilities in dependencies.
 

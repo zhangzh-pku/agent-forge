@@ -21,9 +21,21 @@ and regional degradation response for AgentForge deployments.
    - `GET /tasks/{task_id}/runs/{run_id}/events/replay?from_seq={seq}`
 
 ### Recovery
-1. Run stale-run recovery (`pkg/ops.Recoverer`) with a stale threshold.
-2. Re-drive DLQ messages (`queue.MemoryQueue.RedriveDeadLetters`).
-3. Re-check run progression and tenant breaker state.
+1. Run stale-run recovery with the dedicated job:
+   - one-shot: `go run cmd/recovery/main.go`
+   - periodic: `AGENTFORGE_RECOVERY_ENABLED=true AGENTFORGE_RECOVERY_INTERVAL=5m go run cmd/recovery/main.go`
+2. Optionally enable consistency scan/repair in same pass:
+   - `AGENTFORGE_RECOVERY_CONSISTENCY_CHECK=true`
+   - `AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR=true`
+3. Re-drive DLQ messages (`queue.MemoryQueue.RedriveDeadLetters`).
+4. Re-check run progression and tenant breaker state.
+
+Expected log output per recovery pass (JSON fields):
+- `recovery.scanned`
+- `recovery.recovered`
+- `recovery.skipped`
+- `recovery.errors` (if any)
+- `consistency.issues` / `repair.applied` when consistency mode is enabled
 
 ## 2. Consistency Drift Repair
 
@@ -33,9 +45,9 @@ and regional degradation response for AgentForge deployments.
 - `active_run_id` references a missing run.
 
 ### Procedure
-1. Run consistency scan (`pkg/ops.ConsistencyChecker.Check`).
+1. Run consistency scan via recovery job (`AGENTFORGE_RECOVERY_CONSISTENCY_CHECK=true`).
 2. Review each issue and scope (`tenant_id`, `task_id`, `run_id`).
-3. Apply targeted repair (`pkg/ops.ConsistencyChecker.Repair`).
+3. Apply targeted repair (`AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR=true`).
 4. Verify corrected state via:
    - `GET /tasks/{task_id}`
    - `GET /tasks/{task_id}/runs/{run_id}`

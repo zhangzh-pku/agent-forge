@@ -586,42 +586,39 @@ func (s *DynamoStore) AddRunUsage(ctx context.Context, taskID, runID string, usa
 		return nil
 	}
 
-	run, err := s.GetRun(ctx, taskID, runID)
-	if err != nil {
-		return err
+	setParts := make([]string, 0, 4)
+	values := map[string]dbtypes.AttributeValue{
+		":zero": avInt(0),
 	}
-
+	names := map[string]string{}
 	if usage != nil {
-		if run.TotalTokenUsage == nil {
-			run.TotalTokenUsage = &model.TokenUsage{}
-		}
-		run.TotalTokenUsage.Input += usage.Input
-		run.TotalTokenUsage.Output += usage.Output
-		run.TotalTokenUsage.Total += usage.Total
+		names["#usage"] = "total_token_usage"
+		names["#input"] = "input"
+		names["#output"] = "output"
+		names["#total"] = "total"
+		values[":in_delta"] = avInt(usage.Input)
+		values[":out_delta"] = avInt(usage.Output)
+		values[":total_delta"] = avInt(usage.Total)
+		setParts = append(setParts,
+			"#usage.#input = if_not_exists(#usage.#input, :zero) + :in_delta",
+			"#usage.#output = if_not_exists(#usage.#output, :zero) + :out_delta",
+			"#usage.#total = if_not_exists(#usage.#total, :zero) + :total_delta",
+		)
 	}
 	if costUSD > 0 {
-		run.TotalCostUSD += costUSD
-	}
-
-	setParts := make([]string, 0, 2)
-	values := map[string]dbtypes.AttributeValue{}
-	if usage != nil {
-		av, mErr := attributevalue.Marshal(run.TotalTokenUsage)
-		if mErr != nil {
-			return fmt.Errorf("state: marshal run usage: %w", mErr)
-		}
-		values[":usage"] = av
-		setParts = append(setParts, "total_token_usage = :usage")
-	}
-	if costUSD > 0 {
-		values[":cost"] = avFloat(run.TotalCostUSD)
-		setParts = append(setParts, "total_cost_usd = :cost")
+		values[":zero_cost"] = avFloat(0)
+		values[":cost_delta"] = avFloat(costUSD)
+		setParts = append(setParts, "total_cost_usd = if_not_exists(total_cost_usd, :zero_cost) + :cost_delta")
 	}
 	if len(setParts) == 0 {
 		return nil
 	}
+	var exprNames map[string]string
+	if len(names) > 0 {
+		exprNames = names
+	}
 
-	_, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.runsTable),
 		Key: map[string]dbtypes.AttributeValue{
 			"pk": avString(runPK(taskID)),
@@ -629,6 +626,7 @@ func (s *DynamoStore) AddRunUsage(ctx context.Context, taskID, runID string, usa
 		},
 		ConditionExpression:       aws.String("attribute_exists(pk)"),
 		UpdateExpression:          aws.String("SET " + strings.Join(setParts, ", ")),
+		ExpressionAttributeNames:  exprNames,
 		ExpressionAttributeValues: values,
 	})
 	if err != nil {

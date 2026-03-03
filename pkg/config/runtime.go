@@ -14,7 +14,9 @@ const (
 	DefaultSQSWaitTimeSeconds     int32 = 20
 	DefaultSQSVisibilityTimeout   int32 = 300
 	DefaultSQSMaxMessages         int32 = 10
+	DefaultRecoveryLimit          int32 = 200
 	DefaultArtifactPresignExpires       = 15 * time.Minute
+	DefaultRecoveryStaleFor             = 10 * time.Minute
 )
 
 // RuntimeMode controls which backend implementations the app should use.
@@ -62,6 +64,17 @@ type AWSRuntimeConfig struct {
 	SQSWaitTimeSeconds          int32
 	SQSVisibilityTimeoutSeconds int32
 	SQSMaxMessages              int32
+}
+
+// RecoveryRuntimeConfig controls stale-run recovery and consistency checks.
+type RecoveryRuntimeConfig struct {
+	Enabled           bool
+	Interval          time.Duration
+	StaleFor          time.Duration
+	Limit             int
+	TenantID          string
+	ConsistencyCheck  bool
+	ConsistencyRepair bool
 }
 
 // LoadAWSStateConfigFromEnv loads DynamoDB table/index config for aws mode.
@@ -136,6 +149,56 @@ func LoadAWSRuntimeConfigFromEnv() (*AWSRuntimeConfig, error) {
 	}, nil
 }
 
+// LoadRecoveryRuntimeConfigFromEnv loads operational recovery settings.
+func LoadRecoveryRuntimeConfigFromEnv() (*RecoveryRuntimeConfig, error) {
+	enabled, err := Bool("AGENTFORGE_RECOVERY_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	interval, err := Duration("AGENTFORGE_RECOVERY_INTERVAL", 0)
+	if err != nil {
+		return nil, err
+	}
+	if interval < 0 {
+		return nil, fmt.Errorf("invalid AGENTFORGE_RECOVERY_INTERVAL: must be >= 0")
+	}
+	staleFor, err := Duration("AGENTFORGE_RECOVERY_STALE_FOR", DefaultRecoveryStaleFor)
+	if err != nil {
+		return nil, err
+	}
+	if staleFor <= 0 {
+		return nil, fmt.Errorf("invalid AGENTFORGE_RECOVERY_STALE_FOR: must be > 0")
+	}
+	limit, err := Int32("AGENTFORGE_RECOVERY_LIMIT", DefaultRecoveryLimit)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid AGENTFORGE_RECOVERY_LIMIT: must be > 0")
+	}
+	check, err := Bool("AGENTFORGE_RECOVERY_CONSISTENCY_CHECK", false)
+	if err != nil {
+		return nil, err
+	}
+	repair, err := Bool("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR", false)
+	if err != nil {
+		return nil, err
+	}
+	if repair && !check {
+		return nil, fmt.Errorf("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR requires AGENTFORGE_RECOVERY_CONSISTENCY_CHECK=true")
+	}
+
+	return &RecoveryRuntimeConfig{
+		Enabled:           enabled,
+		Interval:          interval,
+		StaleFor:          staleFor,
+		Limit:             int(limit),
+		TenantID:          String("AGENTFORGE_RECOVERY_TENANT_ID", ""),
+		ConsistencyCheck:  check,
+		ConsistencyRepair: repair,
+	}, nil
+}
+
 // RequiredString returns a non-empty trimmed env value.
 func RequiredString(key string) (string, error) {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -165,6 +228,22 @@ func Int32(key string, def int32) (int32, error) {
 		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
 	return int32(n), nil
+}
+
+// Bool parses a boolean env value or returns default.
+func Bool(key string, def bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "y", "on":
+		return true, nil
+	case "0", "false", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid %s: %q", key, raw)
+	}
 }
 
 // Duration parses a duration env value (e.g. 15m, 1h) or returns default.

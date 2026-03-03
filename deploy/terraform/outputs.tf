@@ -62,3 +62,13 @@ output "dynamodb_connections_table" {
   description = "DynamoDB table name for WebSocket connection records"
   value       = aws_dynamodb_table.connections.name
 }
+
+output "recovery_lambda_name" {
+  description = "Lambda function name for scheduled stale-run recovery"
+  value       = aws_lambda_function.recovery.function_name
+}
+
+output "recovery_schedule_rule" {
+  description = "EventBridge rule name for recovery scheduling (null when disabled)"
+  value       = var.recovery_enabled ? aws_cloudwatch_event_rule.recovery_schedule[0].name : null
+}

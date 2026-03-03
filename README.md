@@ -21,6 +21,7 @@ AgentForge is composed of three independently deployable components:
 | **Task API** | `cmd/taskapi/` | HTTP server -- accepts task submissions, queries, abort/resume requests |
 | **Worker** | `cmd/worker/` | Consumes messages from an SQS queue (or in-memory queue) and runs the ReAct engine |
 | **WebSocket handlers** | `cmd/wsconnect/`, `cmd/wsdisconnect/` | AWS API Gateway Lambda handlers for `$connect` / `$disconnect` routes |
+| **Recovery job** | `cmd/recovery/` | Stale-run redrive and optional consistency check/repair (one-shot or scheduled) |
 
 ### Data flow
 
@@ -51,10 +52,12 @@ straightforward to swap implementations.
 
 ### Multi-tenancy
 
-Every request must include an `X-Tenant-Id` header. Tenant isolation is enforced at
-the data layer -- all queries are scoped by tenant ID. The auth middleware is
-intentionally simple (header-based) and designed to be replaced with JWT or IAM
-validation.
+Every request must include both tenant and user identity.
+
+- Local/dev `header` mode: `X-Tenant-Id` + `X-User-Id`
+- Production `trusted` mode: `X-Authenticated-Tenant-Id` + `X-Authenticated-User-Id` (set by upstream auth layer)
+
+Task access is enforced by both tenant and user ownership.
 
 ### Streaming
 
@@ -78,6 +81,7 @@ The workspace enforces:
 cmd/
   taskapi/          HTTP API server
   worker/           SQS / in-memory queue worker
+  recovery/         stale-run recovery / consistency repair job
   wsconnect/        WebSocket $connect Lambda handler
   wsdisconnect/     WebSocket $disconnect Lambda handler
 
@@ -146,7 +150,7 @@ worker process needed.
 
 ### Runtime Mode
 
-`cmd/taskapi`, `cmd/worker`, `cmd/wsconnect`, and `cmd/wsdisconnect` support two
+`cmd/taskapi`, `cmd/worker`, `cmd/recovery`, `cmd/wsconnect`, and `cmd/wsdisconnect` support two
 runtime modes:
 
 | `AGENTFORGE_RUNTIME` | Behavior |
@@ -203,7 +207,8 @@ curl -s -X POST http://localhost:8080/tasks \
 
 ```bash
 curl -s http://localhost:8080/tasks/<task_id> \
-  -H "X-Tenant-Id: acme" | jq .
+  -H "X-Tenant-Id: acme" \
+  -H "X-User-Id: alice" | jq .
 ```
 
 ### Health check
@@ -229,6 +234,20 @@ The standalone worker can also be run separately if needed:
 
 ```bash
 go run cmd/worker/main.go
+```
+
+Run recovery one-shot:
+
+```bash
+go run cmd/recovery/main.go
+```
+
+Run scheduled recovery every 5 minutes:
+
+```bash
+AGENTFORGE_RECOVERY_ENABLED=true \
+AGENTFORGE_RECOVERY_INTERVAL=5m \
+go run cmd/recovery/main.go
 ```
 
 ## Development Workflow
@@ -286,10 +305,27 @@ terraform plan
 terraform apply
 ```
 
+Important: the current Terraform module provisions placeholder Lambda artifacts.
+Do not treat `terraform apply` output as production-ready until CI/CD replaces
+placeholders with real signed build artifacts.
+
+Terraform now includes a scheduled recovery Lambda (`agentforge-recovery-*`) and
+an EventBridge rule (`rate(5 minutes)` by default). Tune with:
+- `recovery_enabled`
+- `recovery_schedule_expression`
+- `recovery_stale_for`
+- `recovery_limit`
+- `recovery_consistency_check`
+- `recovery_consistency_repair`
+- `recovery_alarm_actions`
+
 ## API Reference
 
-All endpoints require the `X-Tenant-Id` header. `X-User-Id` is optional
-(defaults to `anonymous`).
+All endpoints require tenant + user identity.
+
+- Local/dev header mode: `X-Tenant-Id` and `X-User-Id`
+- Trusted mode (recommended for aws): `X-Authenticated-Tenant-Id` and
+  `X-Authenticated-User-Id` injected by an upstream authorizer
 
 ### POST /tasks
 

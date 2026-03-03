@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -110,6 +111,7 @@ func (q *SQSQueue) StartConsumer(ctx context.Context, handler MessageHandler) er
 	if handler == nil {
 		return fmt.Errorf("queue: nil handler")
 	}
+	backoff := time.Second
 
 	for {
 		if ctx.Err() != nil {
@@ -129,8 +131,21 @@ func (q *SQSQueue) StartConsumer(ctx context.Context, handler MessageHandler) er
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return fmt.Errorf("queue: sqs receive message: %w", err)
+			log.Printf("queue: sqs receive message failed: %v", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+				if backoff > 30*time.Second {
+					backoff = 30 * time.Second
+				}
+			}
+			continue
 		}
+		backoff = time.Second
 
 		for _, sqsMsg := range out.Messages {
 			if ctx.Err() != nil {
@@ -162,16 +177,55 @@ func (q *SQSQueue) StartConsumer(ctx context.Context, handler MessageHandler) er
 				msg.Attempt = 1
 			}
 
+			stopHeartbeat := q.startVisibilityHeartbeat(ctx, sqsMsg)
 			err := handler(ctx, msg)
+			if stopHeartbeat != nil {
+				close(stopHeartbeat)
+			}
 			if err != nil {
 				// Do not delete. SQS redrive policy handles retries/DLQ.
 				continue
 			}
 			if err := q.deleteMessage(ctx, sqsMsg); err != nil {
-				return err
+				log.Printf("queue: delete processed sqs message failed: %v", err)
 			}
 		}
 	}
+}
+
+func (q *SQSQueue) startVisibilityHeartbeat(ctx context.Context, msg sqstypes.Message) chan struct{} {
+	if q.visibilityTimeout <= 1 || msg.ReceiptHandle == nil || *msg.ReceiptHandle == "" {
+		return nil
+	}
+	interval := time.Duration(q.visibilityTimeout/2) * time.Second
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				heartbeatCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				_, err := q.client.ChangeMessageVisibility(heartbeatCtx, &sqs.ChangeMessageVisibilityInput{
+					QueueUrl:          aws.String(q.queueURL),
+					ReceiptHandle:     msg.ReceiptHandle,
+					VisibilityTimeout: q.visibilityTimeout,
+				})
+				cancel()
+				if err != nil {
+					log.Printf("queue: visibility heartbeat failed: %v", err)
+				}
+			}
+		}
+	}()
+	return stop
 }
 
 func (q *SQSQueue) deleteMessage(ctx context.Context, msg sqstypes.Message) error {

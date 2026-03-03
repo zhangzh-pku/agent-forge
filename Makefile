@@ -1,4 +1,4 @@
-.PHONY: build build-lambda fmt fmt-check vet test test-race lint ci clean
+.PHONY: build build-lambda fmt fmt-check vet test test-race lint vuln ci clean
 
 GO ?= go
 
@@ -7,6 +7,7 @@ build:
 	@mkdir -p bin
 	$(GO) build -o bin/taskapi ./cmd/taskapi
 	$(GO) build -o bin/worker ./cmd/worker
+	$(GO) build -o bin/recovery ./cmd/recovery
 	$(GO) build -o bin/wsconnect ./cmd/wsconnect
 	$(GO) build -o bin/wsdisconnect ./cmd/wsdisconnect
 
@@ -15,6 +16,7 @@ build-lambda:
 	@mkdir -p bin
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/taskapi-bootstrap ./cmd/taskapi
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/worker-bootstrap ./cmd/worker
+	GOOS=linux GOARCH=arm64 $(GO) build -o bin/recovery-bootstrap ./cmd/recovery
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/wsconnect-bootstrap ./cmd/wsconnect
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/wsdisconnect-bootstrap ./cmd/wsdisconnect
 
@@ -42,11 +44,18 @@ test-race:
 lint:
 	$(MAKE) fmt-check
 	$(MAKE) vet
+	golangci-lint run ./...
+
+# Dependency vulnerability checks
+vuln:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # CI checks
 ci:
 	$(MAKE) lint
 	$(MAKE) test
+	$(MAKE) test-race
+	$(MAKE) vuln
 
 # Remove build artifacts
 clean:

@@ -13,6 +13,7 @@ This document is the canonical environment-variable reference for AgentForge.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | Task API listen port (for `cmd/taskapi`). |
+| `AGENTFORGE_AUTH_MODE` | `header` (`local`) / `trusted` (`aws`) | `header` reads `X-Tenant-Id` + `X-User-Id`; `trusted` reads `X-Authenticated-Tenant-Id` + `X-Authenticated-User-Id`. |
 | `AGENTFORGE_LLM_PROVIDER` | `mock` | `mock` or `openai`. |
 | `AGENTFORGE_LLM_MOCK_STEPS` | `3` | Number of mock steps before final answer. |
 | `AGENTFORGE_LLM_MODEL` | `gpt-4o-mini` | Default model ID when task does not specify one. |
@@ -20,9 +21,27 @@ This document is the canonical environment-variable reference for AgentForge.
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai`. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL. |
 
+## Recovery Scheduler Variables
+
+Used by `cmd/recovery`, and optionally by `cmd/taskapi` when enabling background recovery.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTFORGE_RECOVERY_ENABLED` | `false` | Enables background scheduler inside `cmd/taskapi`. |
+| `AGENTFORGE_RECOVERY_INTERVAL` | `0` | Scheduler interval. `0` means run one pass on startup. |
+| `AGENTFORGE_RECOVERY_STALE_FOR` | `10m` | Stale threshold for queued/running runs. |
+| `AGENTFORGE_RECOVERY_LIMIT` | `200` | Max runs/tasks scanned per pass. |
+| `AGENTFORGE_RECOVERY_TENANT_ID` | _(empty)_ | Optional tenant scope; empty scans all tenants. |
+| `AGENTFORGE_RECOVERY_CONSISTENCY_CHECK` | `false` | Enables drift check pass after stale-run recovery. |
+| `AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR` | `false` | Applies consistency repairs (requires consistency check enabled). |
+
+Notes:
+- `cmd/recovery` always executes at least one pass on startup.
+- `AGENTFORGE_RECOVERY_ENABLED=true` mainly controls the background scheduler inside `cmd/taskapi`.
+
 ## AWS Backend Variables
 
-Required when `AGENTFORGE_RUNTIME=aws` for `cmd/taskapi` and `cmd/worker`.
+Required when `AGENTFORGE_RUNTIME=aws` for `cmd/taskapi`, `cmd/worker`, and `cmd/recovery`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|

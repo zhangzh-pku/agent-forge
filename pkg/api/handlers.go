@@ -50,7 +50,7 @@ func (h *Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		h.createTask(w, r)
 	default:
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
@@ -61,7 +61,7 @@ func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(path, "/")
 
 	if len(parts) == 0 || parts[0] == "" {
-		http.Error(w, `{"error":"missing task_id"}`, http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing task_id"})
 		return
 	}
 
@@ -73,7 +73,7 @@ func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 			h.getTask(w, r, taskID)
 			return
 		}
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
@@ -107,7 +107,7 @@ func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 }
 
 func (h *Handler) handleTenantByID(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +116,7 @@ func (h *Handler) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(path, "/")
 
 	if len(parts) < 2 || parts[0] == "" {
-		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
 
@@ -134,7 +134,7 @@ func (h *Handler) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 }
 
 func (h *Handler) createTask(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +197,10 @@ func (h *Handler) getTask(w http.ResponseWriter, r *http.Request, taskID string)
 	tenant := GetTenant(r.Context())
 	t, err := h.svc.GetForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID)
 	if err != nil {
+		if !errors.Is(err, state.ErrNotFound) {
+			writeInternalError(w, tenant.RequestID)
+			return
+		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
 		return
 	}
@@ -258,7 +262,14 @@ func (h *Handler) resumeTask(w http.ResponseWriter, r *http.Request, taskID stri
 		ModelConfigOverride: body.ModelConfigOverride,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		switch {
+		case errors.Is(err, state.ErrNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		case errors.Is(err, task.ErrValidation):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid resume request"})
+		default:
+			writeInternalError(w, tenant.RequestID)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -295,6 +306,10 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request, taskID, runID s
 	tenant := GetTenant(r.Context())
 	run, err := h.svc.GetRunForUser(r.Context(), tenant.TenantID, tenant.UserID, taskID, runID)
 	if err != nil {
+		if !errors.Is(err, state.ErrNotFound) {
+			writeInternalError(w, tenant.RequestID)
+			return
+		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
 		return
 	}

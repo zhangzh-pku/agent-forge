@@ -24,3 +24,67 @@ variable "kms_key_arn" {
   type        = string
   default     = ""
 }
+
+variable "http_allowed_origins" {
+  description = "CORS allowlist for HTTP API origins."
+  type        = list(string)
+  default     = ["http://localhost:3000"]
+}
+
+variable "recovery_enabled" {
+  description = "Enable EventBridge scheduled stale-run recovery Lambda."
+  type        = bool
+  default     = true
+}
+
+variable "recovery_schedule_expression" {
+  description = "EventBridge schedule expression for the recovery Lambda."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "recovery_tenant_id" {
+  description = "Optional tenant scope for recovery (empty = all tenants)."
+  type        = string
+  default     = ""
+}
+
+variable "recovery_stale_for" {
+  description = "Stale threshold passed to the recovery job."
+  type        = string
+  default     = "10m"
+}
+
+variable "recovery_limit" {
+  description = "Maximum runs/tasks scanned per recovery pass."
+  type        = number
+  default     = 200
+
+  validation {
+    condition     = var.recovery_limit > 0
+    error_message = "recovery_limit must be greater than 0."
+  }
+}
+
+variable "recovery_consistency_check" {
+  description = "Run consistency check after stale-run recovery."
+  type        = bool
+  default     = false
+}
+
+variable "recovery_consistency_repair" {
+  description = "Apply consistency repair (requires consistency check)."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.recovery_consistency_repair || var.recovery_consistency_check
+    error_message = "recovery_consistency_repair=true requires recovery_consistency_check=true."
+  }
+}
+
+variable "recovery_alarm_actions" {
+  description = "CloudWatch alarm action ARNs for recovery Lambda errors."
+  type        = list(string)
+  default     = []
+}

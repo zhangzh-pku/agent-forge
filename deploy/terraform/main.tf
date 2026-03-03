@@ -611,6 +611,44 @@ resource "aws_lambda_function" "worker" {
   }
 }
 
+# --- Recovery Lambda ---
+# Periodically redrives stale runs and optionally performs consistency repair.
+resource "aws_lambda_function" "recovery" {
+  function_name = "agentforge-recovery-${var.environment}"
+  role          = aws_iam_role.worker_lambda.arn
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
+  architectures = ["arm64"]
+  timeout       = 120
+  memory_size   = 256
+
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment {
+    variables = {
+      AGENTFORGE_RUNTIME                        = "aws"
+      ENVIRONMENT                               = var.environment
+      TASKS_TABLE                               = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                                = aws_dynamodb_table.runs.name
+      STEPS_TABLE                               = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE                         = aws_dynamodb_table.connections.name
+      TASK_QUEUE_URL                            = aws_sqs_queue.tasks.url
+      ARTIFACTS_BUCKET                          = aws_s3_bucket.artifacts.id
+      AGENTFORGE_RECOVERY_ENABLED               = "false"
+      AGENTFORGE_RECOVERY_STALE_FOR             = var.recovery_stale_for
+      AGENTFORGE_RECOVERY_LIMIT                 = tostring(var.recovery_limit)
+      AGENTFORGE_RECOVERY_TENANT_ID             = var.recovery_tenant_id
+      AGENTFORGE_RECOVERY_CONSISTENCY_CHECK     = tostring(var.recovery_consistency_check)
+      AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR    = tostring(var.recovery_consistency_repair)
+    }
+  }
+
+  tags = {
+    Name = "agentforge-recovery"
+  }
+}
+
 # --- WebSocket Connect Lambda ---
 # Handles $connect route: validates auth token, stores connection record.
 resource "aws_lambda_function" "ws_connect" {
@@ -689,6 +727,49 @@ resource "aws_lambda_event_source_mapping" "worker_sqs" {
   function_response_types = ["ReportBatchItemFailures"]
 }
 
+# Scheduled stale-run recovery
+resource "aws_cloudwatch_event_rule" "recovery_schedule" {
+  count               = var.recovery_enabled ? 1 : 0
+  name                = "agentforge-recovery-${var.environment}"
+  schedule_expression = var.recovery_schedule_expression
+}
+
+resource "aws_cloudwatch_event_target" "recovery_lambda" {
+  count     = var.recovery_enabled ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.recovery_schedule[0].name
+  target_id = "agentforge-recovery"
+  arn       = aws_lambda_function.recovery.arn
+}
+
+resource "aws_lambda_permission" "recovery_events" {
+  count         = var.recovery_enabled ? 1 : 0
+  statement_id  = "AllowEventBridgeInvokeRecovery"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.recovery.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.recovery_schedule[0].arn
+}
+
+# Recovery Lambda error alarm
+resource "aws_cloudwatch_metric_alarm" "recovery_lambda_errors" {
+  alarm_name          = "agentforge-recovery-errors-${var.environment}"
+  alarm_description   = "Recovery Lambda reported execution errors."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.recovery_alarm_actions
+  ok_actions          = var.recovery_alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.recovery.function_name
+  }
+}
+
 # =============================================================================
 # API Gateway - HTTP API (Task REST API)
 # =============================================================================
@@ -702,9 +783,9 @@ resource "aws_apigatewayv2_api" "http" {
   description   = "AgentForge Task REST API"
 
   cors_configuration {
-    allow_origins = ["*"]
+    allow_origins = var.http_allowed_origins
     allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers = ["Content-Type", "Authorization", "X-Request-ID", "X-Tenant-Id", "X-User-Id", "Idempotency-Key"]
+    allow_headers = ["Content-Type", "Authorization", "X-Request-ID", "Idempotency-Key"]
     max_age       = 3600
   }
 
@@ -722,9 +803,10 @@ resource "aws_apigatewayv2_integration" "task_api" {
 }
 
 resource "aws_apigatewayv2_route" "task_api_default" {
-  api_id    = aws_apigatewayv2_api.http.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.task_api.id}"
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "$default"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.task_api.id}"
 }
 
 resource "aws_apigatewayv2_stage" "http" {
@@ -808,9 +890,10 @@ resource "aws_apigatewayv2_integration" "ws_connect" {
 }
 
 resource "aws_apigatewayv2_route" "ws_connect" {
-  api_id    = aws_apigatewayv2_api.websocket.id
-  route_key = "$connect"
-  target    = "integrations/${aws_apigatewayv2_integration.ws_connect.id}"
+  api_id             = aws_apigatewayv2_api.websocket.id
+  route_key          = "$connect"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.ws_connect.id}"
 }
 
 # --- $disconnect route ---

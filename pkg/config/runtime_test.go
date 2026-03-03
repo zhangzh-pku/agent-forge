@@ -67,3 +67,44 @@ func TestLoadAWSRuntimeConfigFromEnv(t *testing.T) {
 		t.Fatalf("unexpected sqs config: %+v", cfg)
 	}
 }
+
+func TestLoadRecoveryRuntimeConfigFromEnv(t *testing.T) {
+	t.Setenv("AGENTFORGE_RECOVERY_ENABLED", "true")
+	t.Setenv("AGENTFORGE_RECOVERY_INTERVAL", "2m")
+	t.Setenv("AGENTFORGE_RECOVERY_STALE_FOR", "15m")
+	t.Setenv("AGENTFORGE_RECOVERY_LIMIT", "300")
+	t.Setenv("AGENTFORGE_RECOVERY_TENANT_ID", "tnt_1")
+	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_CHECK", "true")
+	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR", "true")
+
+	cfg, err := LoadRecoveryRuntimeConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadRecoveryRuntimeConfigFromEnv error: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("expected recovery enabled")
+	}
+	if cfg.Interval != 2*time.Minute {
+		t.Fatalf("unexpected interval: %s", cfg.Interval)
+	}
+	if cfg.StaleFor != 15*time.Minute {
+		t.Fatalf("unexpected stale_for: %s", cfg.StaleFor)
+	}
+	if cfg.Limit != 300 {
+		t.Fatalf("unexpected limit: %d", cfg.Limit)
+	}
+	if cfg.TenantID != "tnt_1" {
+		t.Fatalf("unexpected tenant_id: %s", cfg.TenantID)
+	}
+	if !cfg.ConsistencyCheck || !cfg.ConsistencyRepair {
+		t.Fatalf("unexpected consistency flags: %+v", cfg)
+	}
+}
+
+func TestLoadRecoveryRuntimeConfigFromEnvInvalidRepairWithoutCheck(t *testing.T) {
+	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_CHECK", "false")
+	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR", "true")
+	if _, err := LoadRecoveryRuntimeConfigFromEnv(); err == nil {
+		t.Fatal("expected error when repair is enabled without check")
+	}
+}
