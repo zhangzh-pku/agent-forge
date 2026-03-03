@@ -28,6 +28,11 @@ jobs:
         with:
           terraform_version: "1.6.6"
 
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
       - name: Terraform fmt (check)
         run: terraform -chdir=deploy/terraform fmt -check -recursive
 
@@ -36,3 +41,13 @@ jobs:
 
       - name: Terraform validate
         run: terraform -chdir=deploy/terraform validate
+
+      - name: TFLint
+        run: |
+          tflint --init
+          tflint --chdir=deploy/terraform
+
+      - name: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: deploy/terraform
