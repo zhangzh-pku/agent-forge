@@ -35,6 +35,9 @@ type TaskStore interface {
 	ClearAbortRequested(ctx context.Context, taskID string) error
 	// SetActiveRun updates the active run ID on a task.
 	SetActiveRun(ctx context.Context, taskID string, runID string) error
+	// ApplyResumeTransition atomically applies resume-related state changes:
+	// create new run, set task active_run_id, clear abort flags, and set task status.
+	ApplyResumeTransition(ctx context.Context, taskID string, run *model.Run, from []model.TaskStatus, to model.TaskStatus) error
 	// GetTaskByIdempotencyKey looks up a task by tenant + idempotency key.
 	GetTaskByIdempotencyKey(ctx context.Context, tenantID, idempotencyKey string) (*model.Task, error)
 }

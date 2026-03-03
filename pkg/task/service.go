@@ -221,19 +221,8 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 		ModelConfig:         mc,
 	}
 
-	if err := s.store.PutRun(ctx, run); err != nil {
-		return nil, err
-	}
-
-	// Update active run and reset task state for new execution.
-	if err := s.store.SetActiveRun(ctx, taskID, newRunID); err != nil {
-		return nil, err
-	}
-	// Clear abort flag so the new run doesn't immediately abort.
-	if err := s.store.ClearAbortRequested(ctx, taskID); err != nil {
-		return nil, err
-	}
-	if err := s.store.UpdateTaskStatus(ctx, taskID, []model.TaskStatus{
+	// Atomically apply run creation + task state transition for resume.
+	if err := s.store.ApplyResumeTransition(ctx, taskID, run, []model.TaskStatus{
 		model.TaskStatusQueued, model.TaskStatusRunning,
 		model.TaskStatusSucceeded, model.TaskStatusFailed, model.TaskStatusAborted,
 	}, model.TaskStatusQueued); err != nil {
@@ -247,6 +236,10 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 		SubmittedAt: now.Unix(),
 		Attempt:     1,
 	}); err != nil {
+		// Keep state consistent if enqueue fails: mark the new run/task as failed
+		// instead of leaving them stuck in QUEUED forever.
+		_ = s.store.CompleteRun(ctx, taskID, newRunID, model.RunStatusFailed)
+		_ = s.store.UpdateTaskStatusForRun(ctx, taskID, newRunID, []model.TaskStatus{model.TaskStatusQueued}, model.TaskStatusFailed)
 		return nil, err
 	}
 

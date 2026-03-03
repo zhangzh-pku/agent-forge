@@ -229,6 +229,47 @@ func (s *MemoryStore) SetActiveRun(_ context.Context, taskID string, runID strin
 	return nil
 }
 
+func (s *MemoryStore) ApplyResumeTransition(_ context.Context, taskID string, run *model.Run, from []model.TaskStatus, to model.TaskStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if run == nil || run.TaskID == "" || run.RunID == "" || run.TaskID != taskID {
+		return ErrConflict
+	}
+
+	t, ok := s.tasks[taskID]
+	if !ok {
+		return ErrNotFound
+	}
+
+	key := runKey(run.TaskID, run.RunID)
+	if _, exists := s.runs[key]; exists {
+		return ErrAlreadyExists
+	}
+
+	allowed := false
+	for _, f := range from {
+		if t.Status == f {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return ErrConflict
+	}
+
+	// Commit all resume mutations atomically under one lock.
+	s.runs[key] = cloneRun(run)
+	t.ActiveRunID = run.RunID
+	t.AbortRequested = false
+	t.AbortReason = ""
+	t.AbortTS = nil
+	t.Status = to
+	t.UpdatedAt = time.Now().UTC()
+
+	return nil
+}
+
 func (s *MemoryStore) GetTaskByIdempotencyKey(_ context.Context, tenantID, idempotencyKey string) (*model.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

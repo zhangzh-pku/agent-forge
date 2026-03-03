@@ -259,6 +259,113 @@ func TestSetActiveRun(t *testing.T) {
 	}
 }
 
+func TestApplyResumeTransitionAtomicSuccess(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	task := &model.Task{
+		TaskID:         "task_1",
+		TenantID:       "tnt_1",
+		UserID:         "user_1",
+		Status:         model.TaskStatusSucceeded,
+		ActiveRunID:    "run_old",
+		AbortRequested: true,
+		AbortReason:    "previous abort",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	stepIdx := 1
+	run := &model.Run{
+		TaskID:              "task_1",
+		RunID:               "run_new",
+		TenantID:            "tnt_1",
+		Status:              model.RunStatusQueued,
+		ParentRunID:         "run_old",
+		ResumeFromStepIndex: &stepIdx,
+	}
+
+	err := s.ApplyResumeTransition(ctx, "task_1", run, []model.TaskStatus{
+		model.TaskStatusSucceeded, model.TaskStatusFailed, model.TaskStatusAborted,
+	}, model.TaskStatusQueued)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotTask, _ := s.GetTask(ctx, "task_1")
+	if gotTask.ActiveRunID != "run_new" {
+		t.Fatalf("expected active run run_new, got %s", gotTask.ActiveRunID)
+	}
+	if gotTask.Status != model.TaskStatusQueued {
+		t.Fatalf("expected QUEUED, got %s", gotTask.Status)
+	}
+	if gotTask.AbortRequested || gotTask.AbortReason != "" || gotTask.AbortTS != nil {
+		t.Fatalf("expected abort flags cleared, got abort_requested=%v reason=%q", gotTask.AbortRequested, gotTask.AbortReason)
+	}
+
+	gotRun, err := s.GetRun(ctx, "task_1", "run_new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.ParentRunID != "run_old" {
+		t.Fatalf("expected parent run run_old, got %s", gotRun.ParentRunID)
+	}
+}
+
+func TestApplyResumeTransitionNoPartialOnConflict(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	task := &model.Task{
+		TaskID:         "task_1",
+		TenantID:       "tnt_1",
+		UserID:         "user_1",
+		Status:         model.TaskStatusRunning,
+		ActiveRunID:    "run_old",
+		AbortRequested: true,
+		AbortReason:    "keep me",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	run := &model.Run{
+		TaskID:   "task_1",
+		RunID:    "run_new",
+		TenantID: "tnt_1",
+		Status:   model.RunStatusQueued,
+	}
+
+	// Disallow RUNNING -> QUEUED for this operation to force conflict.
+	err := s.ApplyResumeTransition(ctx, "task_1", run, []model.TaskStatus{
+		model.TaskStatusSucceeded, model.TaskStatusFailed, model.TaskStatusAborted,
+	}, model.TaskStatusQueued)
+	if err != ErrConflict {
+		t.Fatalf("expected ErrConflict, got %v", err)
+	}
+
+	gotTask, _ := s.GetTask(ctx, "task_1")
+	if gotTask.ActiveRunID != "run_old" {
+		t.Fatalf("expected active run unchanged run_old, got %s", gotTask.ActiveRunID)
+	}
+	if gotTask.Status != model.TaskStatusRunning {
+		t.Fatalf("expected status unchanged RUNNING, got %s", gotTask.Status)
+	}
+	if !gotTask.AbortRequested || gotTask.AbortReason != "keep me" {
+		t.Fatalf("expected abort flags unchanged, got abort_requested=%v reason=%q", gotTask.AbortRequested, gotTask.AbortReason)
+	}
+	if _, err := s.GetRun(ctx, "task_1", "run_new"); err != ErrNotFound {
+		t.Fatalf("expected no run_new created, got err=%v", err)
+	}
+}
+
 func TestPutAndGetRun(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()

@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,16 @@ import (
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
 )
+
+type failingQueue struct{}
+
+func (f *failingQueue) Enqueue(_ context.Context, _ *model.SQSMessage) error {
+	return errors.New("enqueue failed")
+}
+
+func (f *failingQueue) StartConsumer(_ context.Context, _ queue.MessageHandler) error {
+	return nil
+}
 
 func newTestService() (*Service, *state.MemoryStore, *queue.MemoryQueue) {
 	store := state.NewMemoryStore()
@@ -257,6 +268,50 @@ func TestResumeWrongUser(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for wrong user on resume")
+	}
+}
+
+func TestResumeEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
+	store := state.NewMemoryStore()
+	createSvc := NewService(store, queue.NewMemoryQueue(10))
+	svc := NewService(store, &failingQueue{})
+	ctx := context.Background()
+
+	resp, err := createSvc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.ClaimRun(ctx, resp.TaskID, resp.RunID)
+	createStepsWithCheckpoints(ctx, store, resp.RunID, 2)
+	store.CompleteRun(ctx, resp.TaskID, resp.RunID, model.RunStatusSucceeded)
+	store.UpdateTaskStatus(ctx, resp.TaskID, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}, model.TaskStatusSucceeded)
+
+	_, err = svc.Resume(ctx, resp.TaskID, &ResumeRequest{
+		TenantID:      "tnt_1",
+		FromRunID:     resp.RunID,
+		FromStepIndex: 0,
+	})
+	if err == nil {
+		t.Fatal("expected enqueue error")
+	}
+
+	taskObj, err := store.GetTask(ctx, resp.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskObj.Status != model.TaskStatusFailed {
+		t.Fatalf("expected task FAILED after enqueue failure, got %s", taskObj.Status)
+	}
+	if taskObj.ActiveRunID == resp.RunID {
+		t.Fatal("expected active run switched to new run")
+	}
+
+	run, err := store.GetRun(ctx, resp.TaskID, taskObj.ActiveRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.RunStatusFailed {
+		t.Fatalf("expected new run FAILED after enqueue failure, got %s", run.Status)
 	}
 }
 
