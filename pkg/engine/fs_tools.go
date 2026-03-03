@@ -51,6 +51,18 @@ type fsWriteTool struct{ ws workspace.Manager }
 
 func (t *fsWriteTool) Name() string        { return "fs.write" }
 func (t *fsWriteTool) Description() string { return "Write a file to the workspace" }
+func (t *fsWriteTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"path":{"type":"string","description":"Workspace-relative file path"},
+			"content":{"type":"string","description":"UTF-8 text content"},
+			"content_base64":{"type":"string","description":"Base64-encoded binary content"}
+		},
+		"required":["path"],
+		"additionalProperties":false
+	}`)
+}
 
 func (t *fsWriteTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {
@@ -85,6 +97,16 @@ type fsReadTool struct{ ws workspace.Manager }
 
 func (t *fsReadTool) Name() string        { return "fs.read" }
 func (t *fsReadTool) Description() string { return "Read a file from the workspace" }
+func (t *fsReadTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"path":{"type":"string","description":"Workspace-relative file path"}
+		},
+		"required":["path"],
+		"additionalProperties":false
+	}`)
+}
 
 func (t *fsReadTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {
@@ -111,6 +133,15 @@ type fsListTool struct{ ws workspace.Manager }
 
 func (t *fsListTool) Name() string        { return "fs.list" }
 func (t *fsListTool) Description() string { return "List files in a workspace directory" }
+func (t *fsListTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"dir":{"type":"string","description":"Directory path, defaults to ."}
+		},
+		"additionalProperties":false
+	}`)
+}
 
 func (t *fsListTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {
@@ -145,6 +176,16 @@ type fsStatTool struct{ ws workspace.Manager }
 
 func (t *fsStatTool) Name() string        { return "fs.stat" }
 func (t *fsStatTool) Description() string { return "Get file metadata" }
+func (t *fsStatTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"path":{"type":"string","description":"Workspace-relative file path"}
+		},
+		"required":["path"],
+		"additionalProperties":false
+	}`)
+}
 
 func (t *fsStatTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {
@@ -169,6 +210,16 @@ type fsDeleteTool struct{ ws workspace.Manager }
 
 func (t *fsDeleteTool) Name() string        { return "fs.delete" }
 func (t *fsDeleteTool) Description() string { return "Delete a file from the workspace" }
+func (t *fsDeleteTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"path":{"type":"string","description":"Workspace-relative file path"}
+		},
+		"required":["path"],
+		"additionalProperties":false
+	}`)
+}
 
 func (t *fsDeleteTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {
@@ -195,6 +246,21 @@ type fsExportTool struct {
 
 func (t *fsExportTool) Name() string        { return "fs.export" }
 func (t *fsExportTool) Description() string { return "Export workspace files as an artifact archive" }
+func (t *fsExportTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"paths":{
+				"type":"array",
+				"items":{"type":"string"},
+				"minItems":1,
+				"description":"Workspace-relative file paths to include"
+			}
+		},
+		"required":["paths"],
+		"additionalProperties":false
+	}`)
+}
 
 func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {

@@ -3,6 +3,7 @@ package artifact
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 )
@@ -43,6 +44,9 @@ func TestMemoryStoreGetNotFound(t *testing.T) {
 	_, err := s.Get(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent key")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 

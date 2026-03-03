@@ -15,6 +15,11 @@ import (
 
 const defaultOpenAIBaseURL = "https://api.openai.com/v1"
 
+const (
+	openAIMaxResponseBytes = 2 << 20 // 2 MiB
+	openAIMaxAttempts      = 3
+)
+
 // OpenAICompatibleClientConfig configures an OpenAI-compatible chat completions client.
 type OpenAICompatibleClientConfig struct {
 	APIKey       string
@@ -78,10 +83,32 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req *LLMRequest) (*LL
 		Messages: make([]openAIMessage, 0, len(req.Messages)),
 	}
 	for _, m := range req.Messages {
-		requestBody.Messages = append(requestBody.Messages, openAIMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+		msg := openAIMessage{
+			Role: string(m.Role),
+		}
+		switch m.Role {
+		case model.MessageRoleAssistant:
+			msg.Content = m.Content
+			if len(m.ToolCalls) > 0 {
+				msg.ToolCalls = make([]openAIToolCallMessage, 0, len(m.ToolCalls))
+				for _, tc := range m.ToolCalls {
+					msg.ToolCalls = append(msg.ToolCalls, openAIToolCallMessage{
+						ID:   tc.ID,
+						Type: "function",
+						Function: openAIToolFunctionCall{
+							Name:      tc.Name,
+							Arguments: tc.Args,
+						},
+					})
+				}
+			}
+		case model.MessageRoleTool:
+			msg.Content = m.Content
+			msg.ToolCallID = m.ToolCallID
+		default:
+			msg.Content = m.Content
+		}
+		requestBody.Messages = append(requestBody.Messages, msg)
 	}
 	if req.ModelConfig != nil {
 		if req.ModelConfig.Temperature > 0 {
@@ -104,12 +131,15 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req *LLMRequest) (*LL
 				Function: openAIFunctionDef{
 					Name:        tool.Name,
 					Description: tool.Description,
-					Parameters: map[string]interface{}{
-						"type":                 "object",
-						"additionalProperties": true,
-					},
+					Parameters:  map[string]interface{}{"type": "object", "additionalProperties": true},
 				},
 			})
+			if len(tool.Parameters) > 0 && json.Valid(tool.Parameters) {
+				var parsed interface{}
+				if err := json.Unmarshal(tool.Parameters, &parsed); err == nil {
+					requestBody.Tools[len(requestBody.Tools)-1].Function.Parameters = parsed
+				}
+			}
 		}
 		if len(requestBody.Tools) > 0 {
 			requestBody.ToolChoice = "auto"
@@ -121,26 +151,55 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req *LLMRequest) (*LL
 		return nil, fmt.Errorf("engine: openai client: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("engine: openai client: build request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
+	var respBody []byte
+	var lastErr error
+	for attempt := 1; attempt <= openAIMaxAttempts; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("engine: openai client: build request: %w", err)
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("engine: openai client: request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("engine: openai client: request failed: %w", err)
+			if attempt < openAIMaxAttempts && ctx.Err() == nil {
+				sleepWithBackoff(ctx, attempt)
+				continue
+			}
+			return nil, lastErr
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("engine: openai client: read response: %w", err)
-	}
+		respBody, err = io.ReadAll(io.LimitReader(resp.Body, openAIMaxResponseBytes+1))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("engine: openai client: read response: %w", err)
+			if attempt < openAIMaxAttempts && ctx.Err() == nil {
+				sleepWithBackoff(ctx, attempt)
+				continue
+			}
+			return nil, lastErr
+		}
+		if len(respBody) > openAIMaxResponseBytes {
+			return nil, fmt.Errorf("engine: openai client: response too large (> %d bytes)", openAIMaxResponseBytes)
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseOpenAIError(resp.StatusCode, respBody)
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			break
+		}
+		lastErr = parseOpenAIError(resp.StatusCode, respBody)
+		if attempt < openAIMaxAttempts && shouldRetryStatus(resp.StatusCode) && ctx.Err() == nil {
+			sleepWithBackoff(ctx, attempt)
+			continue
+		}
+		return nil, lastErr
+	}
+	if respBody == nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("engine: openai client: empty response")
 	}
 
 	var completion openAIChatResponse
@@ -163,6 +222,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req *LLMRequest) (*LL
 			args = "{}"
 		}
 		toolCalls = append(toolCalls, ToolCall{
+			ID:   tc.ID,
 			Name: tc.Function.Name,
 			Args: args,
 		})
@@ -225,6 +285,29 @@ func parseOpenAIError(statusCode int, body []byte) error {
 	return fmt.Errorf("engine: openai client: status %d: %s", statusCode, strings.TrimSpace(string(body)))
 }
 
+func shouldRetryStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests ||
+		statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout
+}
+
+func sleepWithBackoff(ctx context.Context, attempt int) {
+	if attempt <= 0 {
+		return
+	}
+	backoff := 200 * time.Millisecond
+	for i := 1; i < attempt; i++ {
+		backoff *= 2
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
 type openAIChatRequest struct {
 	Model       string          `json:"model"`
 	Messages    []openAIMessage `json:"messages"`
@@ -235,8 +318,10 @@ type openAIChatRequest struct {
 }
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string                  `json:"role"`
+	Content    interface{}             `json:"content,omitempty"`
+	ToolCallID string                  `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIToolCallMessage `json:"tool_calls,omitempty"`
 }
 
 type openAITool struct {
@@ -245,9 +330,9 @@ type openAITool struct {
 }
 
 type openAIFunctionDef struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Parameters  interface{} `json:"parameters,omitempty"`
 }
 
 type openAIChatResponse struct {
@@ -266,6 +351,8 @@ type openAIChoiceMessage struct {
 }
 
 type openAIToolCallMessage struct {
+	ID       string                 `json:"id,omitempty"`
+	Type     string                 `json:"type,omitempty"`
 	Function openAIToolFunctionCall `json:"function"`
 }
 

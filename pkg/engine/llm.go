@@ -3,6 +3,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/agentforge/agentforge/pkg/model"
 )
@@ -24,14 +25,16 @@ type LLMResponse struct {
 
 // ToolCall represents a tool invocation requested by the LLM.
 type ToolCall struct {
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name"`
 	Args string `json:"args"` // JSON-encoded arguments
 }
 
 // ToolSpec describes an available tool for the LLM.
 type ToolSpec struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // LLMClient abstracts the language model backend.

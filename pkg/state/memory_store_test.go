@@ -209,6 +209,14 @@ func TestSetAbortRequested(t *testing.T) {
 	if got.AbortTS == nil {
 		t.Fatal("expected non-nil abort_ts")
 	}
+
+	requested, reason, err := s.IsAbortRequested(ctx, "task_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !requested || reason != "user cancel" {
+		t.Fatalf("unexpected abort state: requested=%v reason=%q", requested, reason)
+	}
 }
 
 func TestClearAbortRequested(t *testing.T) {

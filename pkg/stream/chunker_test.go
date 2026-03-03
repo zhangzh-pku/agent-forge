@@ -220,6 +220,15 @@ func TestAWSPusherSuccess(t *testing.T) {
 	}
 }
 
+func TestIsGoneErrorPreciseMatch(t *testing.T) {
+	if IsGoneError(fmt.Errorf("processed 410 records")) {
+		t.Fatal("expected false for unrelated 410 text")
+	}
+	if !IsGoneError(fmt.Errorf("api error: status code: 410")) {
+		t.Fatal("expected true for 410 status error")
+	}
+}
+
 func TestChunkedAWSPusherFlushByBytes(t *testing.T) {
 	var mu sync.Mutex
 	var calls int
@@ -341,8 +350,8 @@ func TestIsGoneError(t *testing.T) {
 	if !IsGoneError(fmt.Errorf("GoneException: connection no longer exists")) {
 		t.Fatal("GoneException string should match")
 	}
-	if !IsGoneError(fmt.Errorf("HTTP 410: connection stale")) {
-		t.Fatal("410 string should match")
+	if !IsGoneError(fmt.Errorf("HTTP 410 Gone: connection stale")) {
+		t.Fatal("410 Gone string should match")
 	}
 	if IsGoneError(fmt.Errorf("network timeout")) {
 		t.Fatal("timeout should not be gone")

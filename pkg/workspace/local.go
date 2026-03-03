@@ -107,6 +107,8 @@ func (m *LocalManager) Read(_ context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, fmt.Errorf("workspace: read: %w", err)
@@ -119,6 +121,8 @@ func (m *LocalManager) List(_ context.Context, dir string) ([]FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	entries, err := os.ReadDir(abs)
 	if err != nil {
 		return nil, fmt.Errorf("workspace: list: %w", err)
@@ -145,6 +149,8 @@ func (m *LocalManager) Stat(_ context.Context, path string) (*FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("workspace: stat: %w", err)
@@ -182,8 +188,10 @@ func (m *LocalManager) Delete(_ context.Context, path string) error {
 
 // Snapshot creates a tar.gz of the workspace.
 func (m *LocalManager) Snapshot(_ context.Context) (io.ReadCloser, error) {
+	m.mu.RLock()
 	pr, pw := io.Pipe()
 	go func() {
+		defer m.mu.RUnlock()
 		gw := gzip.NewWriter(pw)
 		tw := tar.NewWriter(gw)
 		err := filepath.Walk(m.cfg.Root, func(path string, info os.FileInfo, err error) error {

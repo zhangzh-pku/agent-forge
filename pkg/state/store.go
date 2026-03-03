@@ -23,6 +23,8 @@ type TaskStore interface {
 	PutTask(ctx context.Context, task *model.Task) error
 	// GetTask retrieves a task by ID. Returns ErrNotFound if missing.
 	GetTask(ctx context.Context, taskID string) (*model.Task, error)
+	// IsAbortRequested returns whether abort was requested and the optional reason.
+	IsAbortRequested(ctx context.Context, taskID string) (requested bool, reason string, err error)
 	// UpdateTaskStatus atomically updates task status with a condition.
 	UpdateTaskStatus(ctx context.Context, taskID string, from []model.TaskStatus, to model.TaskStatus) error
 	// UpdateTaskStatusForRun atomically updates task status only if active_run_id matches runID.

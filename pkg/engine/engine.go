@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync/atomic"
 	"time"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
@@ -29,17 +28,15 @@ func DefaultEngineConfig() Config {
 
 // Engine orchestrates the ReAct execution loop.
 type Engine struct {
-	cfg        Config
-	store      state.Store
-	artifacts  artifact.Store
-	llm        LLMClient
-	tools      ToolRegistry
-	pusher     stream.Pusher
-	memorySn   *memory.Snapshotter
-	log        *util.Logger
-	seqCounter atomic.Int64
-	metrics    *Metrics
-	tenantID   string // set during Execute for tenant-scoped operations
+	cfg       Config
+	store     state.Store
+	artifacts artifact.Store
+	llm       LLMClient
+	tools     ToolRegistry
+	pusher    stream.Pusher
+	memorySn  *memory.Snapshotter
+	log       *util.Logger
+	metrics   *Metrics
 }
 
 // NewEngine creates a new execution engine.
@@ -75,10 +72,9 @@ type RunResult struct {
 func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, ws workspace.Manager) (*RunResult, error) {
 	log := e.log.With("task_id", task.TaskID).With("run_id", run.RunID).With("tenant_id", task.TenantID).With("trace_id", util.NewID("tr_"))
 
-	e.tenantID = task.TenantID
-
 	log.Info("engine: starting execution")
 	e.metrics.TaskStarted()
+	var eventSeq int64
 
 	// Initialize memory from prompt or restored state.
 	mem := &model.MemorySnapshot{
@@ -123,11 +119,11 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 	// Add system prompt.
 	if len(mem.Messages) == 0 {
 		mem.Messages = append(mem.Messages, model.MemoryMessage{
-			Role:    "system",
+			Role:    model.MessageRoleSystem,
 			Content: "You are an AI agent. Use the available tools to complete the task. When done, provide a final answer.",
 		})
 		mem.Messages = append(mem.Messages, model.MemoryMessage{
-			Role:    "user",
+			Role:    model.MessageRoleUser,
 			Content: task.Prompt,
 		})
 	}
@@ -135,11 +131,11 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 	// ReAct loop.
 	for stepIdx := startStep; stepIdx < startStep+e.cfg.MaxSteps; stepIdx++ {
 		// Check abort before each step.
-		currentTask, err := e.store.GetTask(ctx, task.TaskID)
+		abortRequested, abortReason, err := e.store.IsAbortRequested(ctx, task.TaskID)
 		if err != nil {
 			return nil, fmt.Errorf("engine: check abort: %w", err)
 		}
-		if currentTask.AbortRequested {
+		if abortRequested {
 			log.Info("engine: abort requested, stopping")
 			now := time.Now().UTC()
 			abortStep := &model.Step{
@@ -148,12 +144,12 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				Type:         model.StepTypeFinal,
 				Status:       model.StepStatusOK,
 				Input:        "abort_requested",
-				Output:       currentTask.AbortReason,
+				Output:       abortReason,
 				TSStart:      now,
 				TSEnd:        now,
 				LatencyMS:    0,
 				ErrorCode:    "ABORTED",
-				ErrorMessage: currentTask.AbortReason,
+				ErrorMessage: abortReason,
 			}
 			if err := e.store.PutStep(ctx, abortStep); err != nil && !errors.Is(err, state.ErrConflict) {
 				log.Error("engine: write abort step failed", map[string]interface{}{"error": err.Error()})
@@ -161,9 +157,9 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			if err := e.store.UpdateLastStepIndex(ctx, task.TaskID, run.RunID, stepIdx); err != nil {
 				log.Error("engine: update last step index failed", map[string]interface{}{"error": err.Error(), "step_index": stepIdx})
 			}
-			e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventComplete, map[string]interface{}{
+			e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventComplete, map[string]interface{}{
 				"status": "aborted",
-				"reason": currentTask.AbortReason,
+				"reason": abortReason,
 			})
 			e.metrics.TaskAborted()
 			return &RunResult{
@@ -185,7 +181,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		}
 
 		// Push step_start event.
-		e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventStepStart, map[string]interface{}{
+		e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventStepStart, map[string]interface{}{
 			"step_index": stepIdx,
 		})
 
@@ -198,8 +194,8 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			Tools:       collectToolSpecs(e.tools),
 		})
 		if err != nil {
-			e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, err)
-			e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventError, map[string]interface{}{
+			e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, "LLM_ERROR", err)
+			e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventError, map[string]interface{}{
 				"error_code": "LLM_ERROR",
 				"message":    err.Error(),
 			})
@@ -211,10 +207,25 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			}, nil
 		}
 
+		assistantToolCalls := make([]model.MemoryToolCall, 0, len(llmResp.ToolCalls))
+		for idx, tc := range llmResp.ToolCalls {
+			id := tc.ID
+			if id == "" {
+				id = fmt.Sprintf("call_%d_%d", stepIdx, idx)
+				llmResp.ToolCalls[idx].ID = id
+			}
+			assistantToolCalls = append(assistantToolCalls, model.MemoryToolCall{
+				ID:   id,
+				Name: tc.Name,
+				Args: tc.Args,
+			})
+		}
+
 		// Append assistant message.
 		mem.Messages = append(mem.Messages, model.MemoryMessage{
-			Role:    "assistant",
-			Content: llmResp.Content,
+			Role:      model.MessageRoleAssistant,
+			Content:   llmResp.Content,
+			ToolCalls: assistantToolCalls,
 		})
 
 		// Determine step type and execute tools if needed.
@@ -224,7 +235,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		if len(llmResp.ToolCalls) > 0 {
 			stepType = model.StepTypeToolCall
 			for _, tc := range llmResp.ToolCalls {
-				e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventToolCall, map[string]interface{}{
+				e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventToolCall, map[string]interface{}{
 					"tool": tc.Name, "args": tc.Args,
 				})
 
@@ -234,7 +245,18 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				} else {
 					result, err := tool.Execute(ctx, tc.Args)
 					if err != nil {
-						toolOutput = fmt.Sprintf("error: %v", err)
+						e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, "TOOL_EXEC_ERROR", err)
+						e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventError, map[string]interface{}{
+							"error_code": "TOOL_EXEC_ERROR",
+							"tool":       tc.Name,
+							"message":    err.Error(),
+						})
+						e.metrics.TaskFailed()
+						return &RunResult{
+							Status:       model.RunStatusFailed,
+							LastStep:     stepIdx,
+							ErrorMessage: fmt.Sprintf("tool %s execution failed: %v", tc.Name, err),
+						}, nil
 					} else if result.Error != "" {
 						toolOutput = fmt.Sprintf("error: %s", result.Error)
 					} else {
@@ -242,14 +264,15 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 					}
 				}
 
-				e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventToolResult, map[string]interface{}{
+				e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventToolResult, map[string]interface{}{
 					"tool": tc.Name, "output": toolOutput,
 				})
 
 				// Append tool result to memory.
 				mem.Messages = append(mem.Messages, model.MemoryMessage{
-					Role:    "user",
-					Content: fmt.Sprintf("[Tool %s result]: %s", tc.Name, toolOutput),
+					Role:       model.MessageRoleTool,
+					ToolCallID: tc.ID,
+					Content:    toolOutput,
 				})
 			}
 		}
@@ -320,7 +343,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		}
 
 		// Push step_end event.
-		e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventStepEnd, map[string]interface{}{
+		e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventStepEnd, map[string]interface{}{
 			"step_index": stepIdx,
 			"type":       string(stepType),
 			"latency_ms": latency,
@@ -354,7 +377,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				log.Error("engine: update last step index failed", map[string]interface{}{"error": err.Error(), "step_index": stepIdx + 1})
 			}
 
-			e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventComplete, map[string]interface{}{
+			e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventComplete, map[string]interface{}{
 				"final_answer": llmResp.Content,
 			})
 
@@ -367,7 +390,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 	}
 
 	// Max steps reached.
-	e.pushEvent(ctx, task.TaskID, run.RunID, model.StreamEventError, map[string]interface{}{
+	e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventError, map[string]interface{}{
 		"error_code": "MAX_STEPS",
 		"message":    "max steps reached",
 	})
@@ -397,6 +420,7 @@ func collectToolSpecs(reg ToolRegistry) []ToolSpec {
 		specs = append(specs, ToolSpec{
 			Name:        t.Name(),
 			Description: t.Description(),
+			Parameters:  t.Schema(),
 		})
 	}
 	if len(specs) == 0 {
@@ -405,8 +429,11 @@ func collectToolSpecs(reg ToolRegistry) []ToolSpec {
 	return specs
 }
 
-func (e *Engine) writeErrorStep(ctx context.Context, runID string, stepIdx int, start time.Time, stepErr error) {
+func (e *Engine) writeErrorStep(ctx context.Context, runID string, stepIdx int, start time.Time, errorCode string, stepErr error) {
 	now := time.Now().UTC()
+	if errorCode == "" {
+		errorCode = "STEP_ERROR"
+	}
 	step := &model.Step{
 		RunID:        runID,
 		StepIndex:    stepIdx,
@@ -415,7 +442,7 @@ func (e *Engine) writeErrorStep(ctx context.Context, runID string, stepIdx int, 
 		TSStart:      start,
 		TSEnd:        now,
 		LatencyMS:    now.Sub(start).Milliseconds(),
-		ErrorCode:    "LLM_ERROR",
+		ErrorCode:    errorCode,
 		ErrorMessage: stepErr.Error(),
 	}
 	if err := e.store.PutStep(ctx, step); err != nil {
@@ -423,11 +450,15 @@ func (e *Engine) writeErrorStep(ctx context.Context, runID string, stepIdx int, 
 	}
 }
 
-func (e *Engine) pushEvent(ctx context.Context, taskID, runID string, eventType model.StreamEventType, data interface{}) {
+func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, seqCounter *int64, eventType model.StreamEventType, data interface{}) {
 	if e.pusher == nil {
 		return
 	}
-	seq := e.seqCounter.Add(1)
+	var seq int64 = 1
+	if seqCounter != nil {
+		*seqCounter = *seqCounter + 1
+		seq = *seqCounter
+	}
 	event := &model.StreamEvent{
 		TaskID: taskID,
 		RunID:  runID,
@@ -443,7 +474,7 @@ func (e *Engine) pushEvent(ctx context.Context, taskID, runID string, eventType 
 	}
 	for _, conn := range conns {
 		// Tenant isolation: skip connections belonging to a different tenant.
-		if e.tenantID != "" && conn.TenantID != e.tenantID {
+		if tenantID != "" && conn.TenantID != tenantID {
 			continue
 		}
 		alive, pushErr := e.pusher.Push(ctx, conn.ConnectionID, event)

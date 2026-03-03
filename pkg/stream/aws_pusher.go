@@ -28,9 +28,11 @@ func IsGoneError(err error) bool {
 	if _, ok := err.(*GoneError); ok {
 		return true
 	}
-	// Match common AWS SDK error patterns for GoneException / 410 status.
-	msg := err.Error()
-	return strings.Contains(msg, "GoneException") || strings.Contains(msg, "410")
+	// Match common AWS SDK error patterns for GoneException / 410 Gone status.
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "goneexception") ||
+		strings.Contains(msg, "status code: 410") ||
+		strings.Contains(msg, "410 gone")
 }
 
 // AWSPusher sends events via API Gateway Management API (PostToConnection).

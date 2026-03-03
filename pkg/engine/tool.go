@@ -1,6 +1,9 @@
 package engine
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // ToolResult is the output of a tool invocation.
 type ToolResult struct {
@@ -14,6 +17,8 @@ type Tool interface {
 	Name() string
 	// Description returns a brief description for the LLM.
 	Description() string
+	// Schema returns a JSON Schema describing expected arguments.
+	Schema() json.RawMessage
 	// Execute runs the tool with JSON-encoded args. Must respect context cancellation.
 	Execute(ctx context.Context, args string) (*ToolResult, error)
 }

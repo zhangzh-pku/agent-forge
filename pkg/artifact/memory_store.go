@@ -40,7 +40,7 @@ func (s *MemoryStore) Get(_ context.Context, key string) (io.ReadCloser, error) 
 	data, ok := s.blobs[key]
 	s.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("memory store: key not found: %s", key)
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, key)
 	}
 	return io.NopCloser(bytes.NewReader(data)), nil
 }

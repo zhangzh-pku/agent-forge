@@ -133,7 +133,7 @@ func (h *Handler) createTask(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.Create(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, tenant.RequestID)
 		return
 	}
 
@@ -172,7 +172,7 @@ func (h *Handler) abortTask(w http.ResponseWriter, r *http.Request, taskID strin
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, tenant.RequestID)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -232,7 +232,7 @@ func (h *Handler) listSteps(w http.ResponseWriter, r *http.Request, taskID, runI
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task or run not found"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, tenant.RequestID)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"steps": steps})
@@ -242,4 +242,11 @@ func writeJSON(w http.ResponseWriter, code int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(data)
+}
+
+func writeInternalError(w http.ResponseWriter, requestID string) {
+	writeJSON(w, http.StatusInternalServerError, map[string]string{
+		"error":      "internal server error",
+		"request_id": requestID,
+	})
 }

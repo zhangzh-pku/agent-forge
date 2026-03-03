@@ -66,7 +66,7 @@ func (h *WSHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.connStore.PutConnection(r.Context(), conn); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, tenant.RequestID)
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *WSHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.connStore.DeleteConnection(r.Context(), body.ConnectionID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, tenant.RequestID)
 		return
 	}
 

@@ -3,8 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agentforge/agentforge/pkg/model"
@@ -43,7 +46,7 @@ func TestOpenAICompatibleClientChatFinalAnswer(t *testing.T) {
 
 	resp, err := client.Chat(context.Background(), &LLMRequest{
 		Messages: []model.MemoryMessage{
-			{Role: "user", Content: "hello"},
+			{Role: model.MessageRoleUser, Content: "hello"},
 		},
 	})
 	if err != nil {
@@ -111,7 +114,7 @@ func TestOpenAICompatibleClientChatToolCalls(t *testing.T) {
 
 	resp, err := client.Chat(context.Background(), &LLMRequest{
 		Messages: []model.MemoryMessage{
-			{Role: "user", Content: "write file"},
+			{Role: model.MessageRoleUser, Content: "write file"},
 		},
 		Tools: []ToolSpec{
 			{Name: "fs.write", Description: "Write a file"},
@@ -132,6 +135,130 @@ func TestOpenAICompatibleClientChatToolCalls(t *testing.T) {
 	}
 	if resp.ToolCalls[1].Args != "{}" {
 		t.Fatalf("expected empty args to normalize to {}, got %q", resp.ToolCalls[1].Args)
+	}
+}
+
+func TestOpenAICompatibleClientChatToolMessageProtocol(t *testing.T) {
+	var seenRequest openAIChatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seenRequest); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleClientConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Chat(context.Background(), &LLMRequest{
+		Messages: []model.MemoryMessage{
+			{
+				Role:    model.MessageRoleAssistant,
+				Content: "",
+				ToolCalls: []model.MemoryToolCall{
+					{ID: "call_1", Name: "fs.write", Args: `{"path":"a.txt","content":"x"}`},
+				},
+			},
+			{
+				Role:       model.MessageRoleTool,
+				ToolCallID: "call_1",
+				Content:    "wrote 1 byte",
+			},
+		},
+		Tools: []ToolSpec{
+			{
+				Name:        "fs.write",
+				Description: "Write file",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seenRequest.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(seenRequest.Messages))
+	}
+	if len(seenRequest.Messages[0].ToolCalls) != 1 || seenRequest.Messages[0].ToolCalls[0].ID != "call_1" {
+		t.Fatalf("assistant tool_calls not mapped correctly: %+v", seenRequest.Messages[0].ToolCalls)
+	}
+	if seenRequest.Messages[1].ToolCallID != "call_1" {
+		t.Fatalf("expected tool_call_id=call_1, got %q", seenRequest.Messages[1].ToolCallID)
+	}
+	if len(seenRequest.Tools) != 1 {
+		t.Fatalf("expected 1 tool definition, got %d", len(seenRequest.Tools))
+	}
+	if seenRequest.Tools[0].Function.Parameters == nil {
+		t.Fatal("expected tool parameters schema to be set")
+	}
+}
+
+func TestOpenAICompatibleClientChatRetries429(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) < 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleClientConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Chat(context.Background(), &LLMRequest{
+		Messages: []model.MemoryMessage{{Role: model.MessageRoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 attempts, got %d", calls.Load())
+	}
+}
+
+func TestOpenAICompatibleClientChatResponseTooLarge(t *testing.T) {
+	huge := strings.Repeat("a", openAIMaxResponseBytes+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"choices":[{"message":{"content":%q},"finish_reason":"stop"}]}`, huge)))
+	}))
+	defer srv.Close()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleClientConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Chat(context.Background(), &LLMRequest{
+		Messages: []model.MemoryMessage{{Role: model.MessageRoleUser, Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected response size error")
+	}
+	if !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

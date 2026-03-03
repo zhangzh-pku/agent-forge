@@ -73,17 +73,23 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		model.TaskStatusRunning); err != nil {
 		if errors.Is(err, state.ErrConflict) || errors.Is(err, state.ErrNotFound) {
 			log.Info("worker: task claim failed (run not active), skipping", map[string]interface{}{"error": err.Error()})
-			_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusAborted)
+			if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusAborted); completeErr != nil {
+				log.Error("worker: failed to complete stale run", map[string]interface{}{"error": completeErr.Error()})
+			}
 			return nil
 		}
-		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
+		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
+			log.Error("worker: failed to complete run after status update failure", map[string]interface{}{"error": completeErr.Error()})
+		}
 		return fmt.Errorf("worker: update task status to RUNNING: %w", err)
 	}
 
 	// Step 2: Load task and run.
 	task, err := w.store.GetTask(ctx, msg.TaskID)
 	if err != nil {
-		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
+		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
+			log.Error("worker: failed to complete run after task load failure", map[string]interface{}{"error": completeErr.Error()})
+		}
 		return fmt.Errorf("worker: get task: %w", err)
 	}
 	if task.TenantID != msg.TenantID {
@@ -91,14 +97,22 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 			"task_tenant_id": task.TenantID,
 			"msg_tenant_id":  msg.TenantID,
 		})
-		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
-		_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed)
+		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
+			log.Error("worker: failed to complete run on tenant mismatch", map[string]interface{}{"error": completeErr.Error()})
+		}
+		if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed); updateErr != nil {
+			log.Error("worker: failed to update task status on tenant mismatch", map[string]interface{}{"error": updateErr.Error()})
+		}
 		return nil
 	}
 	run, err := w.store.GetRun(ctx, msg.TaskID, msg.RunID)
 	if err != nil {
-		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
-		_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed)
+		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
+			log.Error("worker: failed to complete run after run load failure", map[string]interface{}{"error": completeErr.Error()})
+		}
+		if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed); updateErr != nil {
+			log.Error("worker: failed to update task status after run load failure", map[string]interface{}{"error": updateErr.Error()})
+		}
 		return fmt.Errorf("worker: get run: %w", err)
 	}
 
@@ -124,6 +138,9 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	if w.tools != nil {
 		for _, name := range w.tools.List() {
 			if tool := w.tools.Get(name); tool != nil {
+				if registry.Get(name) != nil {
+					log.Info("worker: overriding built-in tool", map[string]interface{}{"tool": name})
+				}
 				registry.Register(tool)
 			}
 		}
@@ -134,15 +151,21 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	result, err := eng.Execute(ctx, task, run, ws)
 	if err != nil {
 		log.Error("worker: engine error", map[string]interface{}{"error": err.Error()})
-		_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed)
-		_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
+		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
+			log.Error("worker: failed to complete run after engine error", map[string]interface{}{"error": completeErr.Error()})
+		}
+		if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
 			[]model.TaskStatus{model.TaskStatusRunning},
-			model.TaskStatusFailed)
+			model.TaskStatusFailed); updateErr != nil {
+			log.Error("worker: failed to update task status after engine error", map[string]interface{}{"error": updateErr.Error()})
+		}
 		return nil // Ack — don't retry engine failures.
 	}
 
 	// Step 6: Finalize.
-	_ = w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, result.Status)
+	if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, result.Status); completeErr != nil {
+		log.Error("worker: failed to complete run", map[string]interface{}{"error": completeErr.Error()})
+	}
 
 	taskStatus := model.TaskStatusSucceeded
 	switch result.Status {
@@ -151,9 +174,11 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	case model.RunStatusAborted:
 		taskStatus = model.TaskStatusAborted
 	}
-	_ = w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
+	if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID,
 		[]model.TaskStatus{model.TaskStatusRunning},
-		taskStatus)
+		taskStatus); updateErr != nil {
+		log.Error("worker: failed to update task status on finalize", map[string]interface{}{"error": updateErr.Error()})
+	}
 
 	log.Info("worker: execution complete", map[string]interface{}{
 		"status":    string(result.Status),

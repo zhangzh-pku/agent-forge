@@ -125,6 +125,17 @@ func (s *MemoryStore) GetTask(_ context.Context, taskID string) (*model.Task, er
 	return cloneTask(t), nil
 }
 
+func (s *MemoryStore) IsAbortRequested(_ context.Context, taskID string) (bool, string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	t, ok := s.tasks[taskID]
+	if !ok {
+		return false, "", ErrNotFound
+	}
+	return t.AbortRequested, t.AbortReason, nil
+}
+
 func (s *MemoryStore) UpdateTaskStatus(_ context.Context, taskID string, from []model.TaskStatus, to model.TaskStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

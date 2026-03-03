@@ -4,12 +4,15 @@ package api
 import (
 	"context"
 	"net/http"
+
+	"github.com/agentforge/agentforge/pkg/util"
 )
 
 // TenantInfo holds authentication context extracted from the request.
 type TenantInfo struct {
-	TenantID string
-	UserID   string
+	TenantID  string
+	UserID    string
+	RequestID string
 }
 
 type tenantContextKey struct{}
@@ -26,16 +29,22 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tenantID := r.Header.Get("X-Tenant-Id")
 		userID := r.Header.Get("X-User-Id")
+		requestID := r.Header.Get("X-Request-Id")
+		if requestID == "" {
+			requestID = util.NewID("req_")
+		}
+		w.Header().Set("X-Request-Id", requestID)
 		if tenantID == "" {
-			http.Error(w, `{"error":"missing X-Tenant-Id header"}`, http.StatusUnauthorized)
+			http.Error(w, `{"error":"missing X-Tenant-Id header","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
 			return
 		}
 		if userID == "" {
 			userID = "anonymous"
 		}
 		ctx := context.WithValue(r.Context(), tenantContextKey{}, &TenantInfo{
-			TenantID: tenantID,
-			UserID:   userID,
+			TenantID:  tenantID,
+			UserID:    userID,
+			RequestID: requestID,
 		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

@@ -18,6 +18,23 @@ import (
 	"github.com/agentforge/agentforge/pkg/task"
 )
 
+func waitForTaskStatus(t *testing.T, store *state.MemoryStore, taskID string, want model.TaskStatus, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		taskObj, err := store.GetTask(context.Background(), taskID)
+		if err == nil && taskObj.Status == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	taskObj, err := store.GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("task lookup failed while waiting for status %s: %v", want, err)
+	}
+	t.Fatalf("timeout waiting for task status %s, got %s", want, taskObj.Status)
+}
+
 // TestFullLoop tests the complete POST → queue → worker → GET steps flow.
 func TestFullLoop(t *testing.T) {
 	store := state.NewMemoryStore()
@@ -65,8 +82,7 @@ func TestFullLoop(t *testing.T) {
 		workerDone <- err
 	}()
 
-	// Wait for processing.
-	time.Sleep(500 * time.Millisecond)
+	waitForTaskStatus(t, store, createResp.TaskID, model.TaskStatusSucceeded, 3*time.Second)
 	cancel()
 	<-workerDone
 
@@ -231,7 +247,7 @@ func TestFullLoopWithAbort(t *testing.T) {
 
 	worker := NewWorker(store, artifacts, q, llm, NewRegistry(), pusher, DefaultEngineConfig())
 	go q.StartConsumer(ctx, worker.handleMessage)
-	time.Sleep(500 * time.Millisecond)
+	waitForTaskStatus(t, store, createResp.TaskID, model.TaskStatusAborted, 3*time.Second)
 	cancel()
 
 	// Verify aborted.
@@ -272,7 +288,7 @@ func TestFullLoopWithResume(t *testing.T) {
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
 	worker1 := NewWorker(store, artifacts, q, llm1, NewRegistry(), pusher, DefaultEngineConfig())
 	go q.StartConsumer(ctx1, worker1.handleMessage)
-	time.Sleep(500 * time.Millisecond)
+	waitForTaskStatus(t, store, createResp.TaskID, model.TaskStatusSucceeded, 3*time.Second)
 	cancel1()
 
 	// Verify first run completed.
@@ -308,7 +324,7 @@ func TestFullLoopWithResume(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	worker2 := NewWorker(store, artifacts, q, llm2, NewRegistry(), pusher, DefaultEngineConfig())
 	go q.StartConsumer(ctx2, worker2.handleMessage)
-	time.Sleep(500 * time.Millisecond)
+	waitForTaskStatus(t, store, createResp.TaskID, model.TaskStatusSucceeded, 3*time.Second)
 	cancel2()
 
 	// Verify resumed run completed.

@@ -3,7 +3,13 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"io"
+)
+
+var (
+	// ErrNotFound is returned when the requested artifact key does not exist.
+	ErrNotFound = errors.New("artifact: not found")
 )
 
 // Store is the interface for persisting and retrieving binary artifacts.

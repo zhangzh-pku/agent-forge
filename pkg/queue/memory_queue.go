@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/agentforge/agentforge/pkg/model"
 )
@@ -39,6 +40,7 @@ func (q *MemoryQueue) StartConsumer(ctx context.Context, handler MessageHandler)
 		case msg := <-q.ch:
 			if err := handler(ctx, msg); err != nil {
 				// In a real SQS consumer, this would nack. Here we just log/skip.
+				log.Printf("queue: handler error for task=%s run=%s: %v", msg.TaskID, msg.RunID, err)
 				continue
 			}
 		}
