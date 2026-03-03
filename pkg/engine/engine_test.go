@@ -638,6 +638,9 @@ func TestEngineStreamPushLiveConnection(t *testing.T) {
 	if typeCount[model.StreamEventStepEnd] == 0 {
 		t.Fatal("expected step_end events")
 	}
+	if typeCount[model.StreamEventTokenChunk] == 0 {
+		t.Fatal("expected token_chunk events from streaming LLM output")
+	}
 	if typeCount[model.StreamEventComplete] == 0 {
 		t.Fatal("expected complete event")
 	}

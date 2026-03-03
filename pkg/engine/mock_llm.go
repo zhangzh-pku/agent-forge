@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/agentforge/agentforge/pkg/model"
@@ -53,6 +54,30 @@ func (m *MockLLMClient) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse
 		TokenUsage:   &model.TokenUsage{Input: 80, Output: 30, Total: 110},
 		FinishReason: "stop",
 	}, nil
+}
+
+// ChatStream streams response content in small chunks while returning the same final response.
+func (m *MockLLMClient) ChatStream(ctx context.Context, req *LLMRequest, onToken func(token string)) (*LLMResponse, error) {
+	resp, err := m.Chat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if onToken != nil && resp.Content != "" {
+		parts := strings.Fields(resp.Content)
+		for i, p := range parts {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			if i == 0 {
+				onToken(p)
+			} else {
+				onToken(" " + p)
+			}
+		}
+	}
+	return resp, nil
 }
 
 // Reset allows reusing the mock.

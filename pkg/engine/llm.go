@@ -42,3 +42,11 @@ type LLMClient interface {
 	// Chat sends a completion request. Must respect context cancellation.
 	Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error)
 }
+
+// StreamingLLMClient is an optional extension for token-by-token streaming.
+type StreamingLLMClient interface {
+	LLMClient
+	// ChatStream sends a completion request and invokes onToken for streamed token deltas.
+	// Implementations should still return the final aggregated response.
+	ChatStream(ctx context.Context, req *LLMRequest, onToken func(token string)) (*LLMResponse, error)
+}

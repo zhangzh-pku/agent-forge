@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -259,6 +260,89 @@ func TestOpenAICompatibleClientChatResponseTooLarge(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "response too large") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpenAICompatibleClientChatStreamContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":\"\"}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleClientConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var tokens []string
+	resp, err := client.ChatStream(context.Background(), &LLMRequest{
+		Messages: []model.MemoryMessage{{Role: model.MessageRoleUser, Content: "hello"}},
+	}, func(token string) {
+		tokens = append(tokens, token)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content != "Hello" {
+		t.Fatalf("expected aggregated content Hello, got %q", resp.Content)
+	}
+	if !reflect.DeepEqual(tokens, []string{"Hel", "lo"}) {
+		t.Fatalf("unexpected tokens: %#v", tokens)
+	}
+	if resp.FinishReason != "stop" {
+		t.Fatalf("unexpected finish reason: %q", resp.FinishReason)
+	}
+	if resp.TokenUsage == nil || resp.TokenUsage.Total != 3 {
+		t.Fatalf("unexpected usage: %+v", resp.TokenUsage)
+	}
+}
+
+func TestOpenAICompatibleClientChatStreamToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"fs.write\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"\"}}]},\"finish_reason\":\"\"}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\",\\\"content\\\":\\\"x\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleClientConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.ChatStream(context.Background(), &LLMRequest{
+		Messages: []model.MemoryMessage{{Role: model.MessageRoleUser, Content: "write"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "fs.write" {
+		t.Fatalf("unexpected tool call metadata: %+v", resp.ToolCalls[0])
+	}
+	if resp.ToolCalls[0].Args != "{\"path\":\"a.txt\",\"content\":\"x\"}" {
+		t.Fatalf("unexpected aggregated args: %q", resp.ToolCalls[0].Args)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Fatalf("unexpected finish reason: %q", resp.FinishReason)
 	}
 }
 

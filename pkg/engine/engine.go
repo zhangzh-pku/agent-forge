@@ -187,23 +187,38 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 
 		stepStart := time.Now().UTC()
 
-		// LLM call.
-		llmResp, err := e.llm.Chat(ctx, &LLMRequest{
+		// LLM call (streaming if supported).
+		llmReq := &LLMRequest{
 			Messages:    mem.Messages,
 			ModelConfig: run.ModelConfig,
 			Tools:       collectToolSpecs(e.tools),
-		})
-		if err != nil {
-			e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, "LLM_ERROR", err)
+		}
+		var llmResp *LLMResponse
+		var llmErr error
+		if sllm, ok := e.llm.(StreamingLLMClient); ok {
+			llmResp, llmErr = sllm.ChatStream(ctx, llmReq, func(token string) {
+				if token == "" {
+					return
+				}
+				e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventTokenChunk, map[string]interface{}{
+					"step_index": stepIdx,
+					"token":      token,
+				})
+			})
+		} else {
+			llmResp, llmErr = e.llm.Chat(ctx, llmReq)
+		}
+		if llmErr != nil {
+			e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, "LLM_ERROR", llmErr)
 			e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventError, map[string]interface{}{
 				"error_code": "LLM_ERROR",
-				"message":    err.Error(),
+				"message":    llmErr.Error(),
 			})
 			e.metrics.TaskFailed()
 			return &RunResult{
 				Status:       model.RunStatusFailed,
 				LastStep:     stepIdx,
-				ErrorMessage: err.Error(),
+				ErrorMessage: llmErr.Error(),
 			}, nil
 		}
 
