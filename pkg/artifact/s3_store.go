@@ -22,6 +22,7 @@ const defaultS3PresignExpiry = 15 * time.Minute
 type S3StoreConfig struct {
 	Bucket         string
 	PresignExpires time.Duration
+	SSEKMSKeyID    string
 }
 
 // S3Store stores artifacts in Amazon S3.
@@ -30,6 +31,7 @@ type S3Store struct {
 	presigner      *s3.PresignClient
 	bucket         string
 	presignExpires time.Duration
+	sseKMSKeyID    string
 }
 
 // NewS3Store creates a production artifact store backed by S3.
@@ -49,6 +51,7 @@ func NewS3Store(client *s3.Client, cfg S3StoreConfig) (*S3Store, error) {
 		presigner:      s3.NewPresignClient(client),
 		bucket:         cfg.Bucket,
 		presignExpires: cfg.PresignExpires,
+		sseKMSKeyID:    cfg.SSEKMSKeyID,
 	}, nil
 }
 
@@ -65,11 +68,7 @@ func (s *S3Store) Put(ctx context.Context, key string, r io.Reader) (string, int
 	counter := &hashCounter{h: h}
 	body := io.TeeReader(r, counter)
 
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-		Body:   body,
-	})
+	_, err := s.client.PutObject(ctx, s.buildPutObjectInput(key, body))
 	if err != nil {
 		return "", 0, fmt.Errorf("artifact: s3 put object: %w", err)
 	}
@@ -163,4 +162,19 @@ func isS3NotFound(err error) bool {
 		}
 	}
 	return false
+}
+
+func (s *S3Store) buildPutObjectInput(key string, body io.Reader) *s3.PutObjectInput {
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Body:   body,
+		// Always request SSE-KMS at put-time. Key ID is optional; when empty, S3
+		// uses the bucket default KMS key configuration.
+		ServerSideEncryption: s3types.ServerSideEncryptionAwsKms,
+	}
+	if s.sseKMSKeyID != "" {
+		input.SSEKMSKeyId = aws.String(s.sseKMSKeyID)
+	}
+	return input
 }

@@ -44,6 +44,7 @@ func TestLoadAWSRuntimeConfigFromEnv(t *testing.T) {
 	t.Setenv("CONNECTIONS_TABLE", "connections")
 	t.Setenv("TASK_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123/agentforge")
 	t.Setenv("ARTIFACTS_BUCKET", "agentforge-artifacts")
+	t.Setenv("ARTIFACT_SSE_KMS_KEY_ARN", "arn:aws:kms:us-east-1:123456789012:key/abcd-1234")
 	t.Setenv("WEBSOCKET_ENDPOINT", "wss://abc.execute-api.us-east-1.amazonaws.com/prod")
 	t.Setenv("ARTIFACT_PRESIGN_EXPIRES", "30m")
 	t.Setenv("SQS_WAIT_TIME_SECONDS", "15")
@@ -56,6 +57,9 @@ func TestLoadAWSRuntimeConfigFromEnv(t *testing.T) {
 	}
 	if cfg.TaskQueueURL == "" || cfg.ArtifactsBucket == "" {
 		t.Fatalf("missing required runtime fields: %+v", cfg)
+	}
+	if cfg.ArtifactSSEKMSKeyARN == "" {
+		t.Fatalf("expected artifact SSE KMS key to be loaded")
 	}
 	if cfg.WebSocketEndpoint != "https://abc.execute-api.us-east-1.amazonaws.com/prod" {
 		t.Fatalf("unexpected websocket endpoint: %s", cfg.WebSocketEndpoint)

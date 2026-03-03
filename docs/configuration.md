@@ -51,6 +51,7 @@ Required when `AGENTFORGE_RUNTIME=aws` for `cmd/taskapi`, `cmd/worker`, and `cmd
 | `CONNECTIONS_TABLE` | Yes | DynamoDB table for websocket connection records. |
 | `TASK_QUEUE_URL` | Yes | SQS queue URL for task dispatch. |
 | `ARTIFACTS_BUCKET` | Yes | S3 bucket for checkpoint artifacts. |
+| `ARTIFACT_SSE_KMS_KEY_ARN` | No | Optional CMK ARN used by `S3Store.Put` SSE-KMS (`aws:kms`). Empty means use bucket default key. |
 | `CONNECTIONS_TASK_INDEX` | No | Connections task GSI name. Default: `task-index`. |
 | `WEBSOCKET_ENDPOINT` | No | API Gateway management endpoint (`https://...`) for pushing stream events. |
 | `ARTIFACT_PRESIGN_EXPIRES` | No | Presigned URL TTL. Default: `15m`. |

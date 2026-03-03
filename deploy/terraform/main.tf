@@ -377,6 +377,19 @@ data "aws_iam_policy_document" "task_api_policy" {
       "${aws_s3_bucket.artifacts.arn}/*",
     ]
   }
+
+  dynamic "statement" {
+    for_each = var.kms_key_arn != "" ? [1] : []
+    content {
+      sid    = "KMSDecryptArtifacts"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+      ]
+      resources = [var.kms_key_arn]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task_api" {
@@ -450,6 +463,21 @@ data "aws_iam_policy_document" "worker_policy" {
       aws_s3_bucket.artifacts.arn,
       "${aws_s3_bucket.artifacts.arn}/*",
     ]
+  }
+
+  dynamic "statement" {
+    for_each = var.kms_key_arn != "" ? [1] : []
+    content {
+      sid    = "KMSS3Artifacts"
+      effect = "Allow"
+      actions = [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey",
+        "kms:DescribeKey",
+      ]
+      resources = [var.kms_key_arn]
+    }
   }
 
   # Allow worker to post messages back through the WebSocket API
@@ -569,6 +597,7 @@ resource "aws_lambda_function" "task_api" {
       CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
       TASK_QUEUE_URL    = aws_sqs_queue.tasks.url
       ARTIFACTS_BUCKET  = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN = var.kms_key_arn
     }
   }
 
@@ -602,6 +631,7 @@ resource "aws_lambda_function" "worker" {
       CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
       TASK_QUEUE_URL     = aws_sqs_queue.tasks.url
       ARTIFACTS_BUCKET   = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN = var.kms_key_arn
       WEBSOCKET_ENDPOINT = aws_apigatewayv2_stage.websocket.invoke_url
     }
   }
@@ -635,6 +665,7 @@ resource "aws_lambda_function" "recovery" {
       CONNECTIONS_TABLE                         = aws_dynamodb_table.connections.name
       TASK_QUEUE_URL                            = aws_sqs_queue.tasks.url
       ARTIFACTS_BUCKET                          = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN                  = var.kms_key_arn
       AGENTFORGE_RECOVERY_ENABLED               = "false"
       AGENTFORGE_RECOVERY_STALE_FOR             = var.recovery_stale_for
       AGENTFORGE_RECOVERY_LIMIT                 = tostring(var.recovery_limit)

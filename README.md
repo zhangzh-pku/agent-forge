@@ -168,6 +168,7 @@ When `AGENTFORGE_RUNTIME=aws`, set these required variables:
 | `CONNECTIONS_TABLE` | DynamoDB websocket connections table |
 | `TASK_QUEUE_URL` | SQS queue URL |
 | `ARTIFACTS_BUCKET` | S3 bucket for memory/workspace snapshots |
+| `ARTIFACT_SSE_KMS_KEY_ARN` | Optional CMK ARN for explicit SSE-KMS on artifact writes |
 
 Optional AWS runtime variables:
 
@@ -176,6 +177,7 @@ Optional AWS runtime variables:
 | `CONNECTIONS_TASK_INDEX` | `task-index` | DynamoDB GSI name used to query task subscribers |
 | `WEBSOCKET_ENDPOINT` | _(empty)_ | API Gateway WebSocket management endpoint |
 | `ARTIFACT_PRESIGN_EXPIRES` | `15m` | S3 presigned URL TTL |
+| `ARTIFACT_SSE_KMS_KEY_ARN` | _(empty)_ | Optional CMK ARN used when writing artifacts with SSE-KMS |
 | `SQS_WAIT_TIME_SECONDS` | `20` | SQS long-poll wait time |
 | `SQS_VISIBILITY_TIMEOUT_SECONDS` | `300` | SQS visibility timeout |
 | `SQS_MAX_MESSAGES` | `10` | Max messages per receive call |

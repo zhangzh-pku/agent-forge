@@ -59,6 +59,7 @@ type AWSRuntimeConfig struct {
 	State                       AWSStateConfig
 	TaskQueueURL                string
 	ArtifactsBucket             string
+	ArtifactSSEKMSKeyARN        string
 	WebSocketEndpoint           string
 	ArtifactPresignExpires      time.Duration
 	SQSWaitTimeSeconds          int32
@@ -141,6 +142,7 @@ func LoadAWSRuntimeConfigFromEnv() (*AWSRuntimeConfig, error) {
 		State:                       *stateCfg,
 		TaskQueueURL:                queueURL,
 		ArtifactsBucket:             artifactsBucket,
+		ArtifactSSEKMSKeyARN:        String("ARTIFACT_SSE_KMS_KEY_ARN", ""),
 		WebSocketEndpoint:           NormalizeWebSocketEndpoint(String("WEBSOCKET_ENDPOINT", "")),
 		ArtifactPresignExpires:      presign,
 		SQSWaitTimeSeconds:          waitTime,

@@ -169,6 +169,7 @@ func initRuntime(ctx context.Context) (state.Store, artstore.Store, queue.Queue,
 	artifacts, err := artstore.NewS3Store(s3.NewFromConfig(awsCfg), artstore.S3StoreConfig{
 		Bucket:         backendCfg.ArtifactsBucket,
 		PresignExpires: backendCfg.ArtifactPresignExpires,
+		SSEKMSKeyID:    backendCfg.ArtifactSSEKMSKeyARN,
 	})
 	if err != nil {
 		return nil, nil, nil, nil, false, "aws", err
