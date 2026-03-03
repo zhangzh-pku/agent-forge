@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -60,6 +61,21 @@ type Service struct {
 // ErrValidation indicates request-level validation failures in task service APIs.
 var ErrValidation = errors.New("validation error")
 
+const allowedModelsEnv = "AGENTFORGE_ALLOWED_MODEL_IDS"
+
+var defaultAllowedModelIDs = []string{
+	"gpt-4o-mini",
+	"gpt-4o",
+	"gpt-4.1",
+	"gpt-4",
+	"claude-3",
+	"claude-3-haiku",
+	"claude-3-sonnet",
+	"claude-3-opus",
+	"claude-sonnet-4-20250514",
+	"claude-opus-4-6",
+}
+
 // NewService creates a new task service.
 func NewService(store state.Store, q queue.Queue) *Service {
 	return &Service{store: store, queue: q}
@@ -78,6 +94,10 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, validationError("prompt is required")
+	}
+	normalizedMC, err := normalizeAndValidateModelConfig(req.ModelConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check idempotency.
@@ -103,7 +123,7 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		ActiveRunID:    runID,
 		IdempotencyKey: req.IdempotencyKey,
 		Prompt:         req.Prompt,
-		ModelConfig:    req.ModelConfig,
+		ModelConfig:    normalizedMC,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -113,7 +133,7 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		RunID:       runID,
 		TenantID:    req.TenantID,
 		Status:      model.RunStatusQueued,
-		ModelConfig: req.ModelConfig,
+		ModelConfig: normalizedMC,
 	}
 
 	if err := s.store.PutTask(ctx, task); err != nil {
@@ -133,7 +153,7 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 	}
 
 	taskType := InferTaskType(req.Prompt)
-	estimatedTokens, estimatedCost := EstimateUsage(req.Prompt, req.ModelConfig)
+	estimatedTokens, estimatedCost := EstimateUsage(req.Prompt, normalizedMC)
 
 	// Enqueue pointer message.
 	if err := s.queue.Enqueue(ctx, &model.SQSMessage{
@@ -264,6 +284,10 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 	mc := req.ModelConfigOverride
 	if mc == nil {
 		mc = task.ModelConfig
+	}
+	mc, err = normalizeAndValidateModelConfig(mc)
+	if err != nil {
+		return nil, err
 	}
 
 	run := &model.Run{
@@ -405,6 +429,81 @@ func hasTaskTenantAccess(task *model.Task, tenantID string) bool {
 
 func validationError(msg string) error {
 	return fmt.Errorf("%w: %s", ErrValidation, msg)
+}
+
+func normalizeAndValidateModelConfig(mc *model.ModelConfig) (*model.ModelConfig, error) {
+	if mc == nil {
+		return nil, nil
+	}
+
+	copyMC := *mc
+	copyMC.ModelID = strings.TrimSpace(copyMC.ModelID)
+	if copyMC.ModelID == "" {
+		return nil, validationError("model_config.model_id is required")
+	}
+	if !isAllowedModelID(copyMC.ModelID) {
+		return nil, validationError("model_config.model_id is not allowed")
+	}
+	if copyMC.Temperature < 0 || copyMC.Temperature > 2 {
+		return nil, validationError("model_config.temperature must be between 0 and 2")
+	}
+	if copyMC.MaxTokens < 0 {
+		return nil, validationError("model_config.max_tokens must be >= 0")
+	}
+	if copyMC.CostCapUSD < 0 {
+		return nil, validationError("model_config.cost_cap_usd must be >= 0")
+	}
+
+	if pm := strings.TrimSpace(copyMC.PolicyMode); pm != "" {
+		switch pm {
+		case "latency-first", "quality-first", "cost-cap":
+			copyMC.PolicyMode = pm
+		default:
+			return nil, validationError("model_config.policy_mode is invalid")
+		}
+	}
+
+	if len(copyMC.FallbackModelIDs) > 0 {
+		fallback := make([]string, 0, len(copyMC.FallbackModelIDs))
+		seen := make(map[string]struct{}, len(copyMC.FallbackModelIDs))
+		for _, m := range copyMC.FallbackModelIDs {
+			modelID := strings.TrimSpace(m)
+			if modelID == "" {
+				continue
+			}
+			if !isAllowedModelID(modelID) {
+				return nil, validationError("model_config.fallback_model_ids contains unsupported model")
+			}
+			if _, exists := seen[modelID]; exists {
+				continue
+			}
+			seen[modelID] = struct{}{}
+			fallback = append(fallback, modelID)
+		}
+		copyMC.FallbackModelIDs = fallback
+	}
+
+	return &copyMC, nil
+}
+
+func isAllowedModelID(modelID string) bool {
+	allowed := make(map[string]struct{})
+	raw := strings.TrimSpace(os.Getenv(allowedModelsEnv))
+	if raw == "" {
+		for _, m := range defaultAllowedModelIDs {
+			allowed[strings.ToLower(strings.TrimSpace(m))] = struct{}{}
+		}
+	} else {
+		for _, part := range strings.Split(raw, ",") {
+			m := strings.ToLower(strings.TrimSpace(part))
+			if m == "" {
+				continue
+			}
+			allowed[m] = struct{}{}
+		}
+	}
+	_, ok := allowed[strings.ToLower(strings.TrimSpace(modelID))]
+	return ok
 }
 
 func (s *Service) markRunAndTaskFailed(taskID, runID string) {

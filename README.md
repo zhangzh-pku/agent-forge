@@ -280,6 +280,7 @@ any external service.
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `AGENTFORGE_LLM_MODEL` | `gpt-4o-mini` | Default model when request omits `model_config.model_id` |
+| `AGENTFORGE_ALLOWED_MODEL_IDS` | _(built-in set)_ | Comma-separated model allowlist for `model_config` request validation |
 | `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | HTTP timeout for LLM requests |
 
 When a task includes `model_config.model_id`, that value overrides

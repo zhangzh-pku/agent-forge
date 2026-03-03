@@ -186,6 +186,10 @@ func (h *Handler) createTask(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.Create(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, task.ErrValidation) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid create request"})
+			return
+		}
 		writeInternalError(w, tenant.RequestID)
 		return
 	}

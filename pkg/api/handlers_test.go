@@ -344,6 +344,25 @@ func TestCreateTaskWithModelConfig(t *testing.T) {
 	}
 }
 
+func TestCreateTaskRejectsInvalidModelConfig(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	rr := doRequest(mux, "POST", "/tasks", map[string]interface{}{
+		"prompt": "test",
+		"model_config": map[string]interface{}{
+			"model_id":    "unknown-model",
+			"temperature": 0.5,
+			"max_tokens":  2048,
+		},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "unknown-model") {
+		t.Fatalf("expected sanitized validation error, got %s", rr.Body.String())
+	}
+}
+
 func TestCreateTaskEmptyPrompt(t *testing.T) {
 	mux, _ := setupTestServer()
 

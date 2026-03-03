@@ -95,6 +95,42 @@ func TestCreateTaskWithModelConfig(t *testing.T) {
 	}
 }
 
+func TestCreateTaskRejectsInvalidModelConfig(t *testing.T) {
+	svc, _, _ := newTestService()
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, &CreateRequest{
+		TenantID: "tnt_1",
+		UserID:   "user_1",
+		Prompt:   "test prompt",
+		ModelConfig: &model.ModelConfig{
+			ModelID:     "unknown-model",
+			Temperature: 0.7,
+		},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func TestCreateTaskRejectsOutOfRangeTemperature(t *testing.T) {
+	svc, _, _ := newTestService()
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, &CreateRequest{
+		TenantID: "tnt_1",
+		UserID:   "user_1",
+		Prompt:   "test prompt",
+		ModelConfig: &model.ModelConfig{
+			ModelID:     "gpt-4o-mini",
+			Temperature: 2.5,
+		},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
 func TestCreateTaskIdempotency(t *testing.T) {
 	svc, _, _ := newTestService()
 	ctx := context.Background()
@@ -421,6 +457,32 @@ func TestResumeWithModelConfigOverride(t *testing.T) {
 	run, _ := store.GetRun(ctx, resp.TaskID, resumeResp.RunID)
 	if run.ModelConfig.ModelID != "claude-3" {
 		t.Fatalf("expected claude-3, got %s", run.ModelConfig.ModelID)
+	}
+}
+
+func TestResumeRejectsInvalidModelConfigOverride(t *testing.T) {
+	svc, store, _ := newTestService()
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	store.ClaimRun(ctx, resp.TaskID, resp.RunID)
+	createStepsWithCheckpoints(ctx, store, resp.RunID, 2)
+	store.CompleteRun(ctx, resp.TaskID, resp.RunID, model.RunStatusSucceeded)
+	store.UpdateTaskStatus(ctx, resp.TaskID, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}, model.TaskStatusSucceeded)
+
+	_, err := svc.Resume(ctx, resp.TaskID, &ResumeRequest{
+		TenantID:      "tnt_1",
+		UserID:        "user_1",
+		FromRunID:     resp.RunID,
+		FromStepIndex: 0,
+		ModelConfigOverride: &model.ModelConfig{
+			ModelID:     "gpt-4o-mini",
+			PolicyMode:  "invalid-mode",
+			Temperature: 0.2,
+		},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 

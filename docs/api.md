@@ -58,6 +58,11 @@ Create a new agent task. Returns immediately after persisting the task and enque
 | `temperature` | float  | Sampling temperature. |
 | `max_tokens`  | int    | Maximum output tokens. |
 
+Validation rules:
+- `model_id` must be in the allowed model list (`AGENTFORGE_ALLOWED_MODEL_IDS` or built-in defaults).
+- `temperature` must be in `[0, 2]`.
+- `max_tokens` must be `>= 0` (`0` means provider default).
+
 **Response** `201 Created`
 
 ```json

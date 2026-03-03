@@ -17,6 +17,7 @@ This document is the canonical environment-variable reference for AgentForge.
 | `AGENTFORGE_LLM_PROVIDER` | `mock` | `mock` or `openai`. |
 | `AGENTFORGE_LLM_MOCK_STEPS` | `3` | Number of mock steps before final answer. |
 | `AGENTFORGE_LLM_MODEL` | `gpt-4o-mini` | Default model ID when task does not specify one. |
+| `AGENTFORGE_ALLOWED_MODEL_IDS` | _(built-in set)_ | Comma-separated allowlist used to validate `model_config.model_id` and fallback model IDs. |
 | `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | LLM request timeout. |
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai`. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL. |
