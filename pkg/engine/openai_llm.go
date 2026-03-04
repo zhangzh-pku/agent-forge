@@ -39,6 +39,7 @@ type OpenAICompatibleClient struct {
 	baseURL      string
 	defaultModel string
 	httpClient   *http.Client
+	streamClient *http.Client
 }
 
 // NewOpenAICompatibleClient creates an LLM client backed by an OpenAI-compatible API.
@@ -63,12 +64,21 @@ func NewOpenAICompatibleClient(cfg OpenAICompatibleClientConfig) (*OpenAICompati
 		}
 		httpClient = &http.Client{Timeout: timeout}
 	}
+	// Streaming responses may run longer than request/JSON calls; rely on context
+	// cancellation instead of http.Client.Timeout.
+	streamClient := &http.Client{
+		Transport:     httpClient.Transport,
+		CheckRedirect: httpClient.CheckRedirect,
+		Jar:           httpClient.Jar,
+		Timeout:       0,
+	}
 
 	return &OpenAICompatibleClient{
 		apiKey:       cfg.APIKey,
 		baseURL:      baseURL,
 		defaultModel: modelID,
 		httpClient:   httpClient,
+		streamClient: streamClient,
 	}, nil
 }
 
@@ -367,7 +377,7 @@ func (c *OpenAICompatibleClient) doStreamRequest(ctx context.Context, bodyBytes 
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.httpClient.Do(httpReq)
+		resp, err := c.streamClient.Do(httpReq)
 		if err != nil {
 			lastErr = fmt.Errorf("engine: openai client: stream request failed: %w", err)
 			if attempt < openAIMaxAttempts && ctx.Err() == nil {

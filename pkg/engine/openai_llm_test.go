@@ -333,6 +333,49 @@ func TestOpenAICompatibleClientChatStreamContent(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleClientChatStreamIgnoresHTTPClientTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":\"\"}]}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+
+		time.Sleep(120 * time.Millisecond)
+
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n" +
+				"data: [DONE]\n\n",
+		))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleClientConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+		Timeout:      50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.ChatStream(context.Background(), &LLMRequest{
+		Messages: []model.MemoryMessage{{Role: model.MessageRoleUser, Content: "hello"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected stream to complete despite short JSON timeout, got %v", err)
+	}
+	if resp.Content != "Hello" {
+		t.Fatalf("expected aggregated content Hello, got %q", resp.Content)
+	}
+}
+
 func TestOpenAICompatibleClientChatStreamToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
