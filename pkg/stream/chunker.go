@@ -36,6 +36,18 @@ type Chunker struct {
 	timer   *time.Timer
 	stopped bool
 	lastErr error // last flush error, for observability
+
+	flushErrorCount int64
+	errorHistory    []string
+}
+
+const maxChunkerErrorHistory = 8
+
+// ChunkerErrorStats captures flush failure observability for diagnostics.
+type ChunkerErrorStats struct {
+	LastError    string   `json:"last_error,omitempty"`
+	ErrorCount   int64    `json:"error_count"`
+	RecentErrors []string `json:"recent_errors,omitempty"`
 }
 
 // NewChunker creates a new chunker with the given flush function.
@@ -110,6 +122,11 @@ func (c *Chunker) drainLocked() {
 	if err := c.flush(data); err != nil {
 		c.mu.Lock()
 		c.lastErr = err
+		c.flushErrorCount++
+		c.errorHistory = append(c.errorHistory, err.Error())
+		if len(c.errorHistory) > maxChunkerErrorHistory {
+			c.errorHistory = append([]string(nil), c.errorHistory[len(c.errorHistory)-maxChunkerErrorHistory:]...)
+		}
 		return
 	}
 	c.mu.Lock()
@@ -123,6 +140,21 @@ func (c *Chunker) LastError() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastErr
+}
+
+// ErrorStats returns accumulated flush error diagnostics.
+func (c *Chunker) ErrorStats() ChunkerErrorStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	stats := ChunkerErrorStats{
+		ErrorCount:   c.flushErrorCount,
+		RecentErrors: append([]string(nil), c.errorHistory...),
+	}
+	if c.lastErr != nil {
+		stats.LastError = c.lastErr.Error()
+	}
+	return stats
 }
 
 // Stop flushes remaining data and stops the chunker.

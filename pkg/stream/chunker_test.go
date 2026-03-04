@@ -192,6 +192,76 @@ func TestChunkerClearsLastErrorAfterSuccessfulFlush(t *testing.T) {
 	c.Stop()
 }
 
+func TestChunkerErrorStatsTracksCountAndHistory(t *testing.T) {
+	cfg := ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1, // force immediate flush
+	}
+
+	flushCalls := 0
+	c := NewChunker(cfg, func(_ []byte) error {
+		flushCalls++
+		if flushCalls <= 3 {
+			return fmt.Errorf("push failed %d", flushCalls)
+		}
+		return nil
+	})
+	defer c.Stop()
+
+	for i := 0; i < 4; i++ {
+		if err := c.Write(&model.StreamEvent{
+			TaskID: "task_1",
+			RunID:  "run_1",
+			Type:   model.StreamEventTokenChunk,
+			Data:   map[string]string{"text": "chunk"},
+		}); err != nil {
+			t.Fatalf("write %d failed: %v", i, err)
+		}
+	}
+
+	stats := c.ErrorStats()
+	if stats.ErrorCount != 3 {
+		t.Fatalf("expected 3 flush errors, got %d", stats.ErrorCount)
+	}
+	if len(stats.RecentErrors) != 3 {
+		t.Fatalf("expected 3 recent errors, got %d", len(stats.RecentErrors))
+	}
+	if stats.LastError != "" {
+		t.Fatalf("expected empty LastError after successful flush, got %q", stats.LastError)
+	}
+}
+
+func TestChunkerErrorStatsHistoryCap(t *testing.T) {
+	cfg := ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1,
+	}
+
+	c := NewChunker(cfg, func(_ []byte) error {
+		return fmt.Errorf("flush failed")
+	})
+	defer c.Stop()
+
+	for i := 0; i < maxChunkerErrorHistory+3; i++ {
+		if err := c.Write(&model.StreamEvent{
+			TaskID: "task_1",
+			RunID:  "run_1",
+			Type:   model.StreamEventTokenChunk,
+			Data:   map[string]string{"text": "chunk"},
+		}); err != nil {
+			t.Fatalf("write %d failed: %v", i, err)
+		}
+	}
+
+	stats := c.ErrorStats()
+	if len(stats.RecentErrors) != maxChunkerErrorHistory {
+		t.Fatalf("expected capped error history size %d, got %d", maxChunkerErrorHistory, len(stats.RecentErrors))
+	}
+	if stats.ErrorCount != int64(maxChunkerErrorHistory+3) {
+		t.Fatalf("expected error count %d, got %d", maxChunkerErrorHistory+3, stats.ErrorCount)
+	}
+}
+
 func TestMockPusher(t *testing.T) {
 	p := NewMockPusher()
 
