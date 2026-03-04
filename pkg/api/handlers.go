@@ -40,9 +40,19 @@ func (h *Handler) SetTenantRuntimeProvider(provider TenantRuntimeProvider) {
 
 // RegisterRoutes registers all API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/tasks", AuthMiddleware(http.HandlerFunc(h.handleTasks)))
-	mux.Handle("/tasks/", AuthMiddleware(http.HandlerFunc(h.handleTaskByID)))
-	mux.Handle("/tenants/", AuthMiddleware(http.HandlerFunc(h.handleTenantByID)))
+	tasksHandler := AuthMiddleware(http.HandlerFunc(h.handleTasks))
+	taskByIDHandler := AuthMiddleware(http.HandlerFunc(h.handleTaskByID))
+	tenantByIDHandler := AuthMiddleware(http.HandlerFunc(h.handleTenantByID))
+
+	// Backward-compatible unversioned routes.
+	mux.Handle("/tasks", tasksHandler)
+	mux.Handle("/tasks/", taskByIDHandler)
+	mux.Handle("/tenants/", tenantByIDHandler)
+
+	// Versioned API routes.
+	mux.Handle("/v1/tasks", tasksHandler)
+	mux.Handle("/v1/tasks/", taskByIDHandler)
+	mux.Handle("/v1/tenants/", tenantByIDHandler)
 }
 
 func (h *Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +67,7 @@ func (h *Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /tasks/{task_id}, /tasks/{task_id}/abort, /tasks/{task_id}/resume,
 	// /tasks/{task_id}/runs/{run_id}/steps
-	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	path := strings.TrimPrefix(normalizeAPIPath(r.URL.Path), "/tasks/")
 	parts := strings.Split(path, "/")
 
 	if len(parts) == 0 || parts[0] == "" {
@@ -112,7 +122,7 @@ func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /tenants/{tenant_id}/runtime or /tenants/{tenant_id}/alerts
-	path := strings.TrimPrefix(r.URL.Path, "/tenants/")
+	path := strings.TrimPrefix(normalizeAPIPath(r.URL.Path), "/tenants/")
 	parts := strings.Split(path, "/")
 
 	if len(parts) < 2 || parts[0] == "" {
@@ -402,6 +412,16 @@ func (h *Handler) getTenantAlerts(w http.ResponseWriter, r *http.Request, tenant
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"alerts": h.tenantRuntime.TenantAlerts(tenantID, limit),
 	})
+}
+
+func normalizeAPIPath(path string) string {
+	if strings.HasPrefix(path, "/v1/") {
+		return strings.TrimPrefix(path, "/v1")
+	}
+	if path == "/v1" {
+		return "/"
+	}
+	return path
 }
 
 func writeJSON(w http.ResponseWriter, code int, data interface{}) {

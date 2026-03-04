@@ -31,8 +31,16 @@ func (h *WSHandler) SetReplayPusher(pusher stream.Pusher) {
 
 // RegisterRoutes registers WebSocket management routes.
 func (h *WSHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/ws/connect", AuthMiddleware(http.HandlerFunc(h.handleConnect)))
-	mux.Handle("/ws/disconnect", AuthMiddleware(http.HandlerFunc(h.handleDisconnect)))
+	connectHandler := AuthMiddleware(http.HandlerFunc(h.handleConnect))
+	disconnectHandler := AuthMiddleware(http.HandlerFunc(h.handleDisconnect))
+
+	// Backward-compatible unversioned routes.
+	mux.Handle("/ws/connect", connectHandler)
+	mux.Handle("/ws/disconnect", disconnectHandler)
+
+	// Versioned API routes.
+	mux.Handle("/v1/ws/connect", connectHandler)
+	mux.Handle("/v1/ws/disconnect", disconnectHandler)
 }
 
 func (h *WSHandler) handleConnect(w http.ResponseWriter, r *http.Request) {

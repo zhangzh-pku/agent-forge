@@ -83,6 +83,27 @@ func TestCreateTask(t *testing.T) {
 	}
 }
 
+func TestCreateAndGetTaskV1Routes(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	rr := doRequest(mux, "POST", "/v1/tasks", map[string]string{
+		"prompt": "hello versioned api",
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var createResp map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&createResp); err != nil {
+		t.Fatal(err)
+	}
+
+	rr = doRequest(mux, "GET", "/v1/tasks/"+createResp["task_id"], nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestCreateTaskIdempotency(t *testing.T) {
 	mux, _ := setupTestServer()
 
@@ -785,6 +806,39 @@ func TestWSConnectTaskOwnershipValidation(t *testing.T) {
 	conns, _ = store.GetConnectionsByTask(context.Background(), createResp.TaskID)
 	if len(conns) != 1 {
 		t.Fatalf("expected 1 connection, got %d", len(conns))
+	}
+}
+
+func TestWSConnectV1Route(t *testing.T) {
+	store := state.NewMemoryStore()
+	q := queue.NewMemoryQueue(100)
+	svc := task.NewService(store, q)
+
+	createResp, err := svc.Create(context.Background(), &task.CreateRequest{
+		TenantID: "tnt_1",
+		UserID:   "user_1",
+		Prompt:   "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wsHandler := NewWSHandler(store, svc)
+	mux := http.NewServeMux()
+	wsHandler.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(map[string]string{
+		"connection_id": "conn_v1",
+		"task_id":       createResp.TaskID,
+	})
+	req := httptest.NewRequest("POST", "/v1/ws/connect", bytes.NewReader(body))
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /v1/ws/connect, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
