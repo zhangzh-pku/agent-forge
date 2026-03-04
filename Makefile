@@ -1,4 +1,4 @@
-.PHONY: build build-lambda fmt fmt-check vet test test-race lint vuln ci clean
+.PHONY: build build-lambda build-lambda-zip fmt fmt-check vet test test-race lint vuln ci clean
 
 GO ?= go
 
@@ -19,6 +19,28 @@ build-lambda:
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/recovery-bootstrap ./cmd/recovery
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/wsconnect-bootstrap ./cmd/wsconnect
 	GOOS=linux GOARCH=arm64 $(GO) build -o bin/wsdisconnect-bootstrap ./cmd/wsdisconnect
+
+# Build Lambda zip artifacts expected by deploy/terraform (dist/*.zip).
+build-lambda-zip: build-lambda
+	@mkdir -p deploy/terraform/dist
+	@set -e; \
+		root="$$(pwd)"; \
+		pack() { \
+			src="$$1"; out="$$2"; \
+			tmp="$$(mktemp -d)"; \
+			cp "$$src" "$$tmp/bootstrap"; \
+			if command -v zip >/dev/null 2>&1; then \
+				(cd "$$tmp" && zip -q -r "$$root/$$out" bootstrap); \
+			else \
+				(cd "$$tmp" && python3 -m zipfile -c "$$root/$$out" bootstrap >/dev/null); \
+			fi; \
+			rm -rf "$$tmp"; \
+		}; \
+		pack bin/taskapi-bootstrap deploy/terraform/dist/task_api.zip; \
+		pack bin/worker-bootstrap deploy/terraform/dist/worker.zip; \
+		pack bin/recovery-bootstrap deploy/terraform/dist/recovery.zip; \
+		pack bin/wsconnect-bootstrap deploy/terraform/dist/ws_connect.zip; \
+		pack bin/wsdisconnect-bootstrap deploy/terraform/dist/ws_disconnect.zip
 
 # Format code
 fmt:

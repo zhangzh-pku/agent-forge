@@ -14,6 +14,7 @@ deploy/terraform/*.tfstate
 deploy/terraform/*.tfstate.backup
 deploy/terraform/*.tfplan
 deploy/terraform/placeholder.zip
+deploy/terraform/dist/
 
 # OS
 .DS_Store

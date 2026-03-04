@@ -19,7 +19,6 @@
 | R-004 | `CC-D2` | `OPENAI_API_KEY` 从明文环境变量迁移到 AWS Secrets Manager（启动期拉取）。 |
 | R-006 | `CC-D7`, `REL-S3` | 完成 Create 路径“落库+入队”事务化或 outbox（Resume 已部分原子化，Create 仍为独立调用）。 |
 | R-007 | `SEC-MUST-01`, `SEC-MUST-02`, `CC-S1..S3` | Terraform 增加并绑定 `aws_apigatewayv2_authorizer`（HTTP + WebSocket），形成可验证的 JWT/claims 身份链路（当前无显式 authorizer 资源）。 |
-| R-008 | `OSS-S2` | 修复“假部署成功”风险：`deploy/terraform/main.tf` 当前 Lambda 仍使用 `placeholder.zip`；需接入真实构建产物（CI 打包 + 发布产物引用 + 环境门禁），避免 `terraform apply` 成功但运行时不可用。 |
 
 ## P1 - 可靠性、引擎与 API 行为
 

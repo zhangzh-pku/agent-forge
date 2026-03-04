@@ -43,33 +43,33 @@ variable "openai_api_key_secret_field" {
 }
 
 variable "task_api_lambda_package_path" {
-  description = "Local path to the task_api Lambda zip package (bootstrap binary). Required in staging/prod."
+  description = "Path to the task_api Lambda zip package (must contain bootstrap at archive root)."
   type        = string
-  default     = ""
+  default     = "dist/task_api.zip"
 }
 
 variable "worker_lambda_package_path" {
-  description = "Local path to the worker Lambda zip package (bootstrap binary). Required in staging/prod."
+  description = "Path to the worker Lambda zip package (must contain bootstrap at archive root)."
   type        = string
-  default     = ""
+  default     = "dist/worker.zip"
 }
 
 variable "recovery_lambda_package_path" {
-  description = "Local path to the recovery Lambda zip package (bootstrap binary). Required in staging/prod."
+  description = "Path to the recovery Lambda zip package (must contain bootstrap at archive root)."
   type        = string
-  default     = ""
+  default     = "dist/recovery.zip"
 }
 
 variable "ws_connect_lambda_package_path" {
-  description = "Local path to the ws_connect Lambda zip package (bootstrap binary). Required in staging/prod."
+  description = "Path to the ws_connect Lambda zip package (must contain bootstrap at archive root)."
   type        = string
-  default     = ""
+  default     = "dist/ws_connect.zip"
 }
 
 variable "ws_disconnect_lambda_package_path" {
-  description = "Local path to the ws_disconnect Lambda zip package (bootstrap binary). Required in staging/prod."
+  description = "Path to the ws_disconnect Lambda zip package (must contain bootstrap at archive root)."
   type        = string
-  default     = ""
+  default     = "dist/ws_disconnect.zip"
 }
 
 variable "http_allowed_origins" {

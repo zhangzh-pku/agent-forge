@@ -23,6 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Lambda zip artifacts
+        run: make build-lambda-zip
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:

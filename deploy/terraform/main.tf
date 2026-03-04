@@ -17,10 +17,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.34"
     }
-    archive = {
-      source  = "hashicorp/archive"
-      version = "~> 2.0"
-    }
   }
 }
 
@@ -627,39 +623,26 @@ resource "aws_iam_role_policy" "websocket" {
 # =============================================================================
 # Lambda Functions
 # =============================================================================
-# These are placeholder definitions. Replace the filename with actual deployment
-# packages built by CI/CD. Each function uses a minimal "hello world" zip for
-# initial provisioning.
+# Lambda packages must be real build artifacts (bootstrap at archive root).
+# Defaults point to deploy/terraform/dist/*.zip, generated via:
+#   make build-lambda-zip
 # =============================================================================
 
-# Dummy archive used as a placeholder until real code is deployed via CI/CD.
-# NOTE: For a real deployment, replace this with a zip containing a compiled
-# Go binary named "bootstrap" (GOOS=linux GOARCH=arm64 go build -o bootstrap).
-data "archive_file" "lambda_placeholder" {
-  type        = "zip"
-  output_path = "${path.module}/placeholder.zip"
-
-  source {
-    content  = "#!/bin/sh\necho 'placeholder - deploy real binary'\nexit 1\n"
-    filename = "bootstrap"
-  }
-}
-
 locals {
-  task_api_lambda_filename         = trimspace(var.task_api_lambda_package_path) != "" ? var.task_api_lambda_package_path : data.archive_file.lambda_placeholder.output_path
-  task_api_lambda_source_code_hash = trimspace(var.task_api_lambda_package_path) != "" ? filebase64sha256(var.task_api_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+  task_api_lambda_filename         = trimspace(var.task_api_lambda_package_path)
+  task_api_lambda_source_code_hash = fileexists(local.task_api_lambda_filename) ? filebase64sha256(local.task_api_lambda_filename) : null
 
-  worker_lambda_filename         = trimspace(var.worker_lambda_package_path) != "" ? var.worker_lambda_package_path : data.archive_file.lambda_placeholder.output_path
-  worker_lambda_source_code_hash = trimspace(var.worker_lambda_package_path) != "" ? filebase64sha256(var.worker_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+  worker_lambda_filename         = trimspace(var.worker_lambda_package_path)
+  worker_lambda_source_code_hash = fileexists(local.worker_lambda_filename) ? filebase64sha256(local.worker_lambda_filename) : null
 
-  recovery_lambda_filename         = trimspace(var.recovery_lambda_package_path) != "" ? var.recovery_lambda_package_path : data.archive_file.lambda_placeholder.output_path
-  recovery_lambda_source_code_hash = trimspace(var.recovery_lambda_package_path) != "" ? filebase64sha256(var.recovery_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+  recovery_lambda_filename         = trimspace(var.recovery_lambda_package_path)
+  recovery_lambda_source_code_hash = fileexists(local.recovery_lambda_filename) ? filebase64sha256(local.recovery_lambda_filename) : null
 
-  ws_connect_lambda_filename         = trimspace(var.ws_connect_lambda_package_path) != "" ? var.ws_connect_lambda_package_path : data.archive_file.lambda_placeholder.output_path
-  ws_connect_lambda_source_code_hash = trimspace(var.ws_connect_lambda_package_path) != "" ? filebase64sha256(var.ws_connect_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+  ws_connect_lambda_filename         = trimspace(var.ws_connect_lambda_package_path)
+  ws_connect_lambda_source_code_hash = fileexists(local.ws_connect_lambda_filename) ? filebase64sha256(local.ws_connect_lambda_filename) : null
 
-  ws_disconnect_lambda_filename         = trimspace(var.ws_disconnect_lambda_package_path) != "" ? var.ws_disconnect_lambda_package_path : data.archive_file.lambda_placeholder.output_path
-  ws_disconnect_lambda_source_code_hash = trimspace(var.ws_disconnect_lambda_package_path) != "" ? filebase64sha256(var.ws_disconnect_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+  ws_disconnect_lambda_filename         = trimspace(var.ws_disconnect_lambda_package_path)
+  ws_disconnect_lambda_source_code_hash = fileexists(local.ws_disconnect_lambda_filename) ? filebase64sha256(local.ws_disconnect_lambda_filename) : null
 }
 
 # --- Task API Lambda ---
@@ -704,8 +687,8 @@ resource "aws_lambda_function" "task_api" {
 
   lifecycle {
     precondition {
-      condition     = var.environment == "dev" || trimspace(var.task_api_lambda_package_path) != ""
-      error_message = "task_api_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
+      condition     = fileexists(local.task_api_lambda_filename)
+      error_message = "task_api Lambda package not found. Run 'make build-lambda-zip' or set task_api_lambda_package_path to a valid zip."
     }
   }
 
@@ -759,8 +742,8 @@ resource "aws_lambda_function" "worker" {
 
   lifecycle {
     precondition {
-      condition     = var.environment == "dev" || trimspace(var.worker_lambda_package_path) != ""
-      error_message = "worker_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
+      condition     = fileexists(local.worker_lambda_filename)
+      error_message = "worker Lambda package not found. Run 'make build-lambda-zip' or set worker_lambda_package_path to a valid zip."
     }
   }
 
@@ -815,8 +798,8 @@ resource "aws_lambda_function" "recovery" {
 
   lifecycle {
     precondition {
-      condition     = var.environment == "dev" || trimspace(var.recovery_lambda_package_path) != ""
-      error_message = "recovery_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
+      condition     = fileexists(local.recovery_lambda_filename)
+      error_message = "recovery Lambda package not found. Run 'make build-lambda-zip' or set recovery_lambda_package_path to a valid zip."
     }
   }
 
@@ -862,8 +845,8 @@ resource "aws_lambda_function" "ws_connect" {
 
   lifecycle {
     precondition {
-      condition     = var.environment == "dev" || trimspace(var.ws_connect_lambda_package_path) != ""
-      error_message = "ws_connect_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
+      condition     = fileexists(local.ws_connect_lambda_filename)
+      error_message = "ws_connect Lambda package not found. Run 'make build-lambda-zip' or set ws_connect_lambda_package_path to a valid zip."
     }
   }
 
@@ -909,8 +892,8 @@ resource "aws_lambda_function" "ws_disconnect" {
 
   lifecycle {
     precondition {
-      condition     = var.environment == "dev" || trimspace(var.ws_disconnect_lambda_package_path) != ""
-      error_message = "ws_disconnect_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
+      condition     = fileexists(local.ws_disconnect_lambda_filename)
+      error_message = "ws_disconnect Lambda package not found. Run 'make build-lambda-zip' or set ws_disconnect_lambda_package_path to a valid zip."
     }
   }
 

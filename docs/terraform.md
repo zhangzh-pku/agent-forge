@@ -14,30 +14,28 @@ This guide covers safe deployment with `deploy/terraform`.
 
 ## Build Real Lambda Packages
 
-For staging/prod, pass real zip package paths for every Lambda.
-Each zip must contain a Linux ARM64 `bootstrap` binary at archive root.
+Terraform no longer supports placeholder Lambda packages.
+Build real artifacts before `plan/apply`:
 
 ```bash
-mkdir -p dist/lambda
-
-GOOS=linux GOARCH=arm64 go build -o dist/lambda/taskapi/bootstrap ./cmd/taskapi
-GOOS=linux GOARCH=arm64 go build -o dist/lambda/worker/bootstrap ./cmd/worker
-GOOS=linux GOARCH=arm64 go build -o dist/lambda/recovery/bootstrap ./cmd/recovery
-GOOS=linux GOARCH=arm64 go build -o dist/lambda/wsconnect/bootstrap ./cmd/wsconnect
-GOOS=linux GOARCH=arm64 go build -o dist/lambda/wsdisconnect/bootstrap ./cmd/wsdisconnect
-
-(cd dist/lambda/taskapi && zip -q -r ../taskapi.zip bootstrap)
-(cd dist/lambda/worker && zip -q -r ../worker.zip bootstrap)
-(cd dist/lambda/recovery && zip -q -r ../recovery.zip bootstrap)
-(cd dist/lambda/wsconnect && zip -q -r ../wsconnect.zip bootstrap)
-(cd dist/lambda/wsdisconnect && zip -q -r ../wsdisconnect.zip bootstrap)
+make build-lambda-zip
 ```
+
+Default artifacts are written to:
+- `deploy/terraform/dist/task_api.zip`
+- `deploy/terraform/dist/worker.zip`
+- `deploy/terraform/dist/recovery.zip`
+- `deploy/terraform/dist/ws_connect.zip`
+- `deploy/terraform/dist/ws_disconnect.zip`
+
+Each zip must contain a Linux ARM64 `bootstrap` binary at archive root.
 
 ## Apply (Dev)
 
-`dev` allows placeholder Lambda packages for quick infrastructure bring-up.
+`dev` also requires real Lambda packages.
 
 ```bash
+make build-lambda-zip
 cd deploy/terraform
 terraform init
 terraform plan -var='environment=dev'
@@ -46,19 +44,20 @@ terraform apply -var='environment=dev'
 
 ## Apply (Staging/Prod)
 
-`staging` and `prod` require all `*_lambda_package_path` variables.
-This prevents accidental placeholder deployments.
+`staging` and `prod` require valid package files.
+Defaults under `deploy/terraform/dist/` can be used directly.
 
 ```bash
+make build-lambda-zip
 cd deploy/terraform
 terraform init
 terraform plan \
   -var='environment=staging' \
-  -var='task_api_lambda_package_path=../../dist/lambda/taskapi.zip' \
-  -var='worker_lambda_package_path=../../dist/lambda/worker.zip' \
-  -var='recovery_lambda_package_path=../../dist/lambda/recovery.zip' \
-  -var='ws_connect_lambda_package_path=../../dist/lambda/wsconnect.zip' \
-  -var='ws_disconnect_lambda_package_path=../../dist/lambda/wsdisconnect.zip'
+  -var='task_api_lambda_package_path=dist/task_api.zip' \
+  -var='worker_lambda_package_path=dist/worker.zip' \
+  -var='recovery_lambda_package_path=dist/recovery.zip' \
+  -var='ws_connect_lambda_package_path=dist/ws_connect.zip' \
+  -var='ws_disconnect_lambda_package_path=dist/ws_disconnect.zip'
 ```
 
 ## OpenAI API Key via Secrets Manager
