@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentforge/agentforge/internal/promptpolicy"
 	"github.com/agentforge/agentforge/internal/util"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/queue"
@@ -94,6 +95,16 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, validationError("prompt is required")
+	}
+	if err := promptpolicy.Validate(req.Prompt, promptpolicy.LoadFromEnv()); err != nil {
+		switch {
+		case errors.Is(err, promptpolicy.ErrPromptTooLong):
+			return nil, validationError("prompt exceeds maximum length")
+		case errors.Is(err, promptpolicy.ErrPromptDenied):
+			return nil, validationError("prompt contains denied content")
+		default:
+			return nil, validationError("prompt is invalid")
+		}
 	}
 	normalizedMC, err := normalizeAndValidateModelConfig(req.ModelConfig)
 	if err != nil {

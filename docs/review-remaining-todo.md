@@ -28,7 +28,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-302 | `CC-N2` | Prompt injection 基础防护（长度限制/可选 deny-list）。 |
 | R-303 | `CC-N3` | EventStore 增加 tenant 维度隔离策略。 |
 | R-312 | `CC-N12` | Lambda VPC 化与 VPC endpoints。 |
 | R-313 | `CC-N15` | pricing table 外置配置化。 |

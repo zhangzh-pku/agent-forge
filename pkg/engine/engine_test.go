@@ -143,6 +143,28 @@ func TestEngineAbort(t *testing.T) {
 	}
 }
 
+func TestEnginePromptPolicyRejectsTooLongPrompt(t *testing.T) {
+	t.Setenv("AGENTFORGE_PROMPT_MAX_CHARS", "8")
+	h := setupHarness(t)
+	defer h.cleanup()
+	h.task.Prompt = "this prompt is too long"
+
+	llm := NewMockLLMClient(1)
+	registry := NewRegistry()
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, registry, h.pusher)
+
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if !strings.Contains(result.ErrorMessage, "maximum length") {
+		t.Fatalf("unexpected error message: %q", result.ErrorMessage)
+	}
+}
+
 func TestEngineAbortEmitsCompleteEvent(t *testing.T) {
 	h := setupHarness(t)
 	defer h.cleanup()

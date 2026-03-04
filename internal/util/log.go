@@ -41,6 +41,11 @@ func (l *Logger) Info(msg string, extra ...map[string]interface{}) {
 	l.log("info", msg, extra...)
 }
 
+// Warn logs a warning-level message.
+func (l *Logger) Warn(msg string, extra ...map[string]interface{}) {
+	l.log("warn", msg, extra...)
+}
+
 // Error logs an error-level message.
 func (l *Logger) Error(msg string, extra ...map[string]interface{}) {
 	l.log("error", msg, extra...)

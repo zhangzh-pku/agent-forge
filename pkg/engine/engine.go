@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentforge/agentforge/internal/promptpolicy"
 	"github.com/agentforge/agentforge/internal/telemetry"
 	"github.com/agentforge/agentforge/internal/util"
 	"github.com/agentforge/agentforge/pkg/artifact"
@@ -145,6 +146,33 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		traceID = util.NewID("tr_")
 	}
 	log := e.log.With("task_id", task.TaskID).With("run_id", run.RunID).With("tenant_id", task.TenantID).With("trace_id", traceID)
+
+	if err := promptpolicy.Validate(task.Prompt, promptpolicy.LoadFromEnv()); err != nil {
+		e.metrics.TaskFailed()
+		switch {
+		case errors.Is(err, promptpolicy.ErrPromptTooLong):
+			log.Warn("engine: prompt rejected by max length policy")
+			return &RunResult{
+				Status:       model.RunStatusFailed,
+				LastStep:     -1,
+				ErrorMessage: "prompt exceeds maximum length",
+			}, nil
+		case errors.Is(err, promptpolicy.ErrPromptDenied):
+			log.Warn("engine: prompt rejected by deny-list policy")
+			return &RunResult{
+				Status:       model.RunStatusFailed,
+				LastStep:     -1,
+				ErrorMessage: "prompt contains denied content",
+			}, nil
+		default:
+			log.Warn("engine: prompt rejected by policy", map[string]interface{}{"error": err.Error()})
+			return &RunResult{
+				Status:       model.RunStatusFailed,
+				LastStep:     -1,
+				ErrorMessage: "prompt rejected by policy",
+			}, nil
+		}
+	}
 
 	log.Info("engine: starting execution")
 	e.metrics.TaskStarted()

@@ -20,6 +20,8 @@ This document is the canonical environment-variable reference for AgentForge.
 | `AGENTFORGE_LLM_ROUTING_DEFAULT_MODE` | `latency-first` | Router default policy mode: `latency-first`, `quality-first`, or `cost-cap`. |
 | `AGENTFORGE_LLM_FALLBACK_PROVIDERS` | _(empty)_ | Comma-separated fallback providers (e.g. `openai,mock`) used by routed LLM fallback chain. |
 | `AGENTFORGE_ALLOWED_MODEL_IDS` | _(built-in set)_ | Comma-separated allowlist used to validate `model_config.model_id` and fallback model IDs. |
+| `AGENTFORGE_PROMPT_MAX_CHARS` | `16000` | Maximum prompt length (Unicode rune count); oversized prompts are rejected. |
+| `AGENTFORGE_PROMPT_DENYLIST` | _(empty)_ | Optional comma-separated deny-list terms; matching prompts are rejected. |
 | `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | LLM request timeout. |
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai`. |
 | `OPENAI_API_KEY_SECRET_ARN` | _(empty)_ | Optional Secrets Manager secret ARN used to resolve OpenAI API key at startup. |
