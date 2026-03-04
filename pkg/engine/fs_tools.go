@@ -9,10 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/agentforge/agentforge/pkg/workspace"
 )
+
+const defaultFSReadMaxBytes = 512 * 1024
 
 // NewFSTools creates the built-in file system tools bound to a workspace.
 func NewFSTools(ws workspace.Manager) []Tool {
@@ -29,7 +33,7 @@ func NewFSToolsWithArtifacts(ws workspace.Manager, artifacts artifactStore) []To
 func NewFSToolsWithArtifactsPrefix(ws workspace.Manager, artifacts artifactStore, exportPrefix string) []Tool {
 	tools := []Tool{
 		&fsWriteTool{ws: ws},
-		&fsReadTool{ws: ws},
+		&fsReadTool{ws: ws, maxReadBytes: fsReadMaxBytesFromEnv()},
 		&fsListTool{ws: ws},
 		&fsStatTool{ws: ws},
 		&fsDeleteTool{ws: ws},
@@ -93,7 +97,10 @@ func (t *fsWriteTool) Execute(ctx context.Context, args string) (*ToolResult, er
 
 // --- fs.read ---
 
-type fsReadTool struct{ ws workspace.Manager }
+type fsReadTool struct {
+	ws           workspace.Manager
+	maxReadBytes int
+}
 
 func (t *fsReadTool) Name() string        { return "fs.read" }
 func (t *fsReadTool) Description() string { return "Read a file from the workspace" }
@@ -101,7 +108,8 @@ func (t *fsReadTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"path":{"type":"string","description":"Workspace-relative file path"}
+			"path":{"type":"string","description":"Workspace-relative file path"},
+			"max_bytes":{"type":"integer","description":"Optional response byte cap for this read (defaults from AGENTFORGE_FS_READ_MAX_BYTES / 512KB)"}
 		},
 		"required":["path"],
 		"additionalProperties":false
@@ -110,7 +118,8 @@ func (t *fsReadTool) Schema() json.RawMessage {
 
 func (t *fsReadTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
 	var params struct {
-		Path string `json:"path"`
+		Path     string `json:"path"`
+		MaxBytes int    `json:"max_bytes"`
 	}
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return &ToolResult{Error: fmt.Sprintf("invalid args: %v", err)}, nil
@@ -120,11 +129,32 @@ func (t *fsReadTool) Execute(ctx context.Context, args string) (*ToolResult, err
 	if err != nil {
 		return &ToolResult{Error: err.Error()}, nil
 	}
+	effectiveLimit := t.maxReadBytes
+	if params.MaxBytes > 0 {
+		effectiveLimit = params.MaxBytes
+	}
+	if effectiveLimit <= 0 {
+		effectiveLimit = defaultFSReadMaxBytes
+	}
+	totalBytes := len(data)
+	truncated := false
+	if totalBytes > effectiveLimit {
+		data = data[:effectiveLimit]
+		truncated = true
+	}
 	// Return as text if printable, else base64.
 	if isPrintable(data) {
-		return &ToolResult{Output: string(data)}, nil
+		out := string(data)
+		if truncated {
+			out += fmt.Sprintf("\n\n[TRUNCATED] showing first %d of %d bytes", len(data), totalBytes)
+		}
+		return &ToolResult{Output: out}, nil
 	}
-	return &ToolResult{Output: base64.StdEncoding.EncodeToString(data)}, nil
+	out := base64.StdEncoding.EncodeToString(data)
+	if truncated {
+		out += fmt.Sprintf("\n\n[TRUNCATED_BASE64] showing first %d of %d bytes before base64 encoding", len(data), totalBytes)
+	}
+	return &ToolResult{Output: out}, nil
 }
 
 // --- fs.list ---
@@ -260,6 +290,18 @@ func (t *fsExportTool) Schema() json.RawMessage {
 		"required":["paths"],
 		"additionalProperties":false
 	}`)
+}
+
+func fsReadMaxBytesFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv("AGENTFORGE_FS_READ_MAX_BYTES"))
+	if raw == "" {
+		return defaultFSReadMaxBytes
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultFSReadMaxBytes
+	}
+	return n
 }
 
 func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, error) {
