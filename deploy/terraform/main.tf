@@ -669,6 +669,8 @@ resource "aws_lambda_function" "task_api" {
   architectures = ["arm64"]
   timeout       = 30
   memory_size   = 256
+  reserved_concurrent_executions = 50
+  kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   filename         = local.task_api_lambda_filename
   source_code_hash = local.task_api_lambda_source_code_hash
@@ -687,6 +689,14 @@ resource "aws_lambda_function" "task_api" {
       OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
       OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
     }
+  }
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.tasks_dlq.arn
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   lifecycle {
@@ -714,6 +724,7 @@ resource "aws_lambda_function" "worker" {
   memory_size   = 1024
   # Keep worker concurrency bounded to protect downstream LLM/provider quotas.
   reserved_concurrent_executions = 20
+  kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   filename         = local.worker_lambda_filename
   source_code_hash = local.worker_lambda_source_code_hash
@@ -733,6 +744,14 @@ resource "aws_lambda_function" "worker" {
       OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
       OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
     }
+  }
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.tasks_dlq.arn
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   lifecycle {
@@ -757,6 +776,8 @@ resource "aws_lambda_function" "recovery" {
   architectures = ["arm64"]
   timeout       = 120
   memory_size   = 256
+  reserved_concurrent_executions = 10
+  kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   filename         = local.recovery_lambda_filename
   source_code_hash = local.recovery_lambda_source_code_hash
@@ -781,6 +802,14 @@ resource "aws_lambda_function" "recovery" {
     }
   }
 
+  dead_letter_config {
+    target_arn = aws_sqs_queue.tasks_dlq.arn
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
   lifecycle {
     precondition {
       condition     = var.environment == "dev" || trimspace(var.recovery_lambda_package_path) != ""
@@ -803,6 +832,8 @@ resource "aws_lambda_function" "ws_connect" {
   architectures = ["arm64"]
   timeout       = 10
   memory_size   = 128
+  reserved_concurrent_executions = 50
+  kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   filename         = local.ws_connect_lambda_filename
   source_code_hash = local.ws_connect_lambda_source_code_hash
@@ -816,6 +847,14 @@ resource "aws_lambda_function" "ws_connect" {
       STEPS_TABLE       = aws_dynamodb_table.steps.name
       CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
     }
+  }
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.tasks_dlq.arn
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   lifecycle {
@@ -840,6 +879,8 @@ resource "aws_lambda_function" "ws_disconnect" {
   architectures = ["arm64"]
   timeout       = 10
   memory_size   = 128
+  reserved_concurrent_executions = 50
+  kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   filename         = local.ws_disconnect_lambda_filename
   source_code_hash = local.ws_disconnect_lambda_source_code_hash
@@ -853,6 +894,14 @@ resource "aws_lambda_function" "ws_disconnect" {
       STEPS_TABLE       = aws_dynamodb_table.steps.name
       CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
     }
+  }
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.tasks_dlq.arn
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   lifecycle {
@@ -1121,6 +1170,29 @@ resource "aws_wafv2_web_acl" "http_api" {
     }
   }
 
+  rule {
+    # Adds explicit Log4Shell/known bad input signatures on top of CommonRuleSet.
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "agentforge-http-waf-known-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = "agentforge-http-waf"
@@ -1230,7 +1302,8 @@ resource "aws_lambda_permission" "task_api_apigw" {
 # CloudWatch log group for API Gateway access logs
 resource "aws_cloudwatch_log_group" "api_gateway" {
   name              = "/aws/apigateway/agentforge-api-${var.environment}"
-  retention_in_days = 30
+  retention_in_days = 365
+  kms_key_id        = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   tags = {
     Name = "agentforge-api-logs"
@@ -1240,7 +1313,8 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
 # CloudWatch log group for WebSocket API Gateway access logs
 resource "aws_cloudwatch_log_group" "websocket_api_gateway" {
   name              = "/aws/apigateway/agentforge-ws-${var.environment}"
-  retention_in_days = 30
+  retention_in_days = 365
+  kms_key_id        = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   tags = {
     Name = "agentforge-ws-logs"
@@ -1300,9 +1374,10 @@ resource "aws_apigatewayv2_integration" "ws_disconnect" {
 }
 
 resource "aws_apigatewayv2_route" "ws_disconnect" {
-  api_id    = aws_apigatewayv2_api.websocket.id
-  route_key = "$disconnect"
-  target    = "integrations/${aws_apigatewayv2_integration.ws_disconnect.id}"
+  api_id             = aws_apigatewayv2_api.websocket.id
+  route_key          = "$disconnect"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.ws_disconnect.id}"
 }
 
 # Deploy the WebSocket API
