@@ -17,7 +17,6 @@
 | R-002 | `CC-S7` | 为关键 Lambda（至少 worker）设置 `reserved_concurrent_executions`，与上游配额对齐。 |
 | R-003 | `CC-S8`, `REL-S6`, `SEC-NICE-03` | 补齐关键告警基线：当前仅 recovery 告警已落地，还需 DLQ depth、worker error rate、API 5xx、关键安全拒绝事件。 |
 | R-004 | `CC-D2` | `OPENAI_API_KEY` 从明文环境变量迁移到 AWS Secrets Manager（启动期拉取）。 |
-| R-005 | `CC-D4` | 修复 restore tar bomb 风险：`io.LimitReader` + 更严格文件 mode 掩码。 |
 | R-006 | `CC-D7`, `REL-S3` | 完成 Create 路径“落库+入队”事务化或 outbox（Resume 已部分原子化，Create 仍为独立调用）。 |
 | R-007 | `SEC-MUST-01`, `SEC-MUST-02`, `CC-S1..S3` | Terraform 增加并绑定 `aws_apigatewayv2_authorizer`（HTTP + WebSocket），形成可验证的 JWT/claims 身份链路（当前无显式 authorizer 资源）。 |
 | R-008 | `OSS-S2` | 修复“假部署成功”风险：`deploy/terraform/main.tf` 当前 Lambda 仍使用 `placeholder.zip`；需接入真实构建产物（CI 打包 + 发布产物引用 + 环境门禁），避免 `terraform apply` 成功但运行时不可用。 |
@@ -78,7 +77,6 @@
 | R-213 | `CC-C11` | 增加生产可用多阶段 `Dockerfile`。 |
 | R-214 | `CC-C12` | 增加 `docker-compose.yml`（taskapi/worker + optional LocalStack）。 |
 | R-215 | `CC-C13` | 增加 `examples/quickstart.sh`。 |
-| R-216 | `CC-C14` | README 增加 badge（CI/License/Go version/Go Report Card）。 |
 | R-217 | `CC-C15` | 增加 `docs/openapi.yaml`。 |
 | R-218 | `CC-C16` | API 路由版本化（`/v1`）。 |
 | R-219 | `CC-C17` | `internal/` 迁移（`pkg/config`, `pkg/util`, `pkg/ops`）。 |
@@ -108,7 +106,7 @@
 | R-316 | `CC-N19` | `PresignedURL` 先 `HeadObject`，对不存在 key 返回 `ErrNotFound`。 |
 | R-317 | `CC-N20` | 增加 benchmark（Chunker/MemoryStore 并发/Engine.Execute）。 |
 | R-318 | `SEC-NICE-01` | S3 强制 TLS 拒绝策略 + CloudWatch Log Group KMS CMK。 |
-| R-319 | `SEC-NICE-02` | 安全扫描门禁补齐 `gosec`/`checkov`，并补 Must/Should 安全回归测试。 |
+| R-319 | `SEC-NICE-02` | 安全扫描门禁补齐剩余项：`gosec` 已接入硬门禁，`checkov` 已接入软门禁；下一步为收敛现有 Terraform 检查项并切换 `checkov` 为硬门禁，同时补 Must/Should 安全回归测试。 |
 | R-320 | `REL-N2` | 建立每日一致性巡检与周报。 |
 | R-321 | `REL-N3` | 分层 retention 与自动 compaction 计划任务。 |
 | R-322 | `REL-N4`, `MAIN-Nice-4` | 季度 game day 故障演练机制化（计划、执行、复盘闭环）。 |

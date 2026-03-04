@@ -30,3 +30,49 @@ jobs:
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  gosec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+
+      - name: Run gosec
+        run: |
+          "$(go env GOPATH)/bin/gosec" \
+            -fmt text \
+            -severity medium \
+            -confidence medium \
+            ./...
+
+  checkov:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install checkov
+        run: python -m pip install --upgrade checkov==3.2.506
+
+      - name: Run checkov (terraform)
+        run: |
+          checkov -d deploy/terraform \
+            --framework terraform \
+            --quiet \
+            --soft-fail

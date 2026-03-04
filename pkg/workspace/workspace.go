@@ -12,6 +12,9 @@ type Config struct {
 	Root string
 	// MaxTotalBytes is the maximum total size of all files (default 50MB).
 	MaxTotalBytes int64
+	// MaxArchiveBytes is the maximum size of snapshot archives accepted by Restore.
+	// This limits compressed input size before extraction.
+	MaxArchiveBytes int64
 	// MaxFileCount is the maximum number of files (default 2000).
 	MaxFileCount int
 }
@@ -19,9 +22,10 @@ type Config struct {
 // DefaultConfig returns sensible defaults.
 func DefaultConfig(runID string) Config {
 	return Config{
-		Root:          "/tmp/agentforge/" + runID,
-		MaxTotalBytes: 50 * 1024 * 1024,
-		MaxFileCount:  2000,
+		Root:            "/tmp/agentforge/" + runID,
+		MaxTotalBytes:   50 * 1024 * 1024,
+		MaxArchiveBytes: 60 * 1024 * 1024,
+		MaxFileCount:    2000,
 	}
 }
 

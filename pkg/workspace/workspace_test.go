@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -354,8 +355,55 @@ func TestRestoreMasksFilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o644 {
-		t.Fatalf("expected restored file mode 0644, got %04o", got)
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("expected restored file mode 0600, got %04o", got)
+	}
+}
+
+func TestRestoreRejectsOversizedArchive(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{
+		Root:            dir,
+		MaxTotalBytes:   1024 * 1024,
+		MaxArchiveBytes: 128,
+		MaxFileCount:    100,
+	}
+	m, err := NewLocalManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Cleanup() })
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Use high-entropy content so compressed archive size remains above MaxArchiveBytes.
+	content := make([]byte, 2048)
+	for i := range content {
+		content[i] = byte((i*31 + 17) % 251)
+	}
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "large.bin",
+		Mode: 0o600,
+		Size: int64(len(content)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = m.Restore(context.Background(), bytes.NewReader(buf.Bytes()))
+	if !errors.Is(err, ErrQuotaBytes) {
+		t.Fatalf("expected ErrQuotaBytes for oversized archive, got %v", err)
 	}
 }
 

@@ -1,5 +1,10 @@
 # AgentForge
 
+[![CI](https://github.com/zhangzh-pku/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangzh-pku/agent-forge/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/zhangzh-pku/agent-forge)](./LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/zhangzh-pku/agent-forge)](./go.mod)
+[![Go Report Card](https://goreportcard.com/badge/github.com/zhangzh-pku/agent-forge)](https://goreportcard.com/report/github.com/zhangzh-pku/agent-forge)
+
 A cloud-native agent execution engine written in Go. AgentForge accepts tasks via
 HTTP, executes them through a ReAct (Reason + Act) loop with LLM-driven tool use,
 checkpoints every step for reliable abort/resume, and streams progress to clients

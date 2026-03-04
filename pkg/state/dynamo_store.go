@@ -598,8 +598,8 @@ func (s *DynamoStore) listTasksByTenantQuery(ctx context.Context, tenantID strin
 			input.ExpressionAttributeNames = names
 		}
 		if limit > 0 {
-			remaining := int32(limit - len(out))
-			if remaining <= 0 {
+			remaining, ok := remainingLimitInt32(limit, len(out))
+			if !ok {
 				break
 			}
 			input.Limit = aws.Int32(remaining)
@@ -935,8 +935,8 @@ func (s *DynamoStore) listRunsByTenantQuery(ctx context.Context, tenantID string
 			input.ExpressionAttributeNames = names
 		}
 		if limit > 0 {
-			remaining := int32(limit - len(out))
-			if remaining <= 0 {
+			remaining, ok := remainingLimitInt32(limit, len(out))
+			if !ok {
 				break
 			}
 			input.Limit = aws.Int32(remaining)
@@ -1058,8 +1058,8 @@ func (s *DynamoStore) ListSteps(ctx context.Context, runID string, from, limit i
 			ScanIndexForward:  aws.Bool(true),
 		}
 		if limit > 0 {
-			remaining := int32(limit - len(out))
-			if remaining <= 0 {
+			remaining, ok := remainingLimitInt32(limit, len(out))
+			if !ok {
 				break
 			}
 			input.Limit = aws.Int32(remaining)
@@ -1249,8 +1249,8 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 	}
 	var startKey map[string]dbtypes.AttributeValue
 	for {
-		queryLimit := int32(limit - len(out))
-		if queryLimit <= 0 {
+		queryLimit, ok := remainingLimitInt32(limit, len(out))
+		if !ok {
 			break
 		}
 		if queryLimit < 50 {
@@ -1539,6 +1539,20 @@ func buildRunScanFilter(tenantID string, statuses []model.RunStatus) (string, ma
 	}
 
 	return strings.Join(parts, " AND "), names, values
+}
+
+func remainingLimitInt32(limit, current int) (int32, bool) {
+	if limit <= 0 {
+		return 0, false
+	}
+	remaining := limit - current
+	if remaining <= 0 {
+		return 0, false
+	}
+	if remaining > math.MaxInt32 {
+		return math.MaxInt32, true
+	}
+	return int32(remaining), true
 }
 
 func (s *DynamoStore) taskExists(ctx context.Context, taskID string) (bool, error) {

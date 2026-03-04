@@ -245,7 +245,7 @@ func Int32(key string, def int32) (int32, error) {
 	if raw == "" {
 		return def, nil
 	}
-	n, err := strconv.Atoi(raw)
+	n, err := strconv.ParseInt(raw, 10, 32)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}

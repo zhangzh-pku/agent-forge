@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,10 @@ func NewLocalManager(cfg Config) (*LocalManager, error) {
 		return nil, fmt.Errorf("workspace: resolve root: %w", err)
 	}
 	cfg.Root = absRoot
+	if cfg.MaxArchiveBytes <= 0 {
+		// Keep a bounded compressed-input limit for restore to mitigate tar bombs.
+		cfg.MaxArchiveBytes = cfg.MaxTotalBytes + 10*1024*1024
+	}
 	if err := os.MkdirAll(cfg.Root, 0o700); err != nil {
 		return nil, fmt.Errorf("workspace: create root: %w", err)
 	}
@@ -121,7 +126,7 @@ func (m *LocalManager) Write(_ context.Context, path string, content []byte) err
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return fmt.Errorf("workspace: mkdir: %w", err)
 	}
-	if err := os.WriteFile(abs, content, 0o644); err != nil {
+	if err := os.WriteFile(abs, content, 0o600); err != nil {
 		return fmt.Errorf("workspace: write: %w", err)
 	}
 
@@ -139,7 +144,7 @@ func (m *LocalManager) Read(_ context.Context, path string) ([]byte, error) {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(abs) // #nosec G304 -- abs is validated by safePath and symlink checks.
 	if err != nil {
 		return nil, fmt.Errorf("workspace: read: %w", err)
 	}
@@ -246,7 +251,7 @@ func (m *LocalManager) Snapshot(_ context.Context) (io.ReadCloser, error) {
 			if info.IsDir() {
 				return nil
 			}
-			f, err := os.Open(path)
+			f, err := os.Open(path) // #nosec G304 -- path is emitted by filepath.Walk under m.cfg.Root.
 			if err != nil {
 				return err
 			}
@@ -280,6 +285,7 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("workspace: create restore temp root: %w", err)
 	}
+	// #nosec G302 -- directories need execute bit; 0700 is least-privileged usable mode.
 	if err := os.Chmod(tmpRoot, 0o700); err != nil {
 		_ = os.RemoveAll(tmpRoot)
 		return fmt.Errorf("workspace: chmod restore temp root: %w", err)
@@ -291,8 +297,15 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 		}
 	}()
 
-	if err := m.extractTarGzIntoRoot(r, tmpRoot); err != nil {
+	limited := &io.LimitedReader{R: r, N: m.cfg.MaxArchiveBytes + 1}
+	if err := m.extractTarGzIntoRoot(limited, tmpRoot); err != nil {
+		if limited.N <= 0 {
+			return fmt.Errorf("%w: archive exceeds %d bytes", ErrQuotaBytes, m.cfg.MaxArchiveBytes)
+		}
 		return err
+	}
+	if limited.N <= 0 {
+		return fmt.Errorf("%w: archive exceeds %d bytes", ErrQuotaBytes, m.cfg.MaxArchiveBytes)
 	}
 
 	backupRoot := m.cfg.Root + ".restore-backup"
@@ -384,8 +397,8 @@ func (m *LocalManager) extractTarGzIntoRoot(r io.Reader, root string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
-			fileMode := os.FileMode(header.Mode) & 0o644
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode)
+			fileMode := sanitizeArchiveFileMode(header.Mode)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode) // #nosec G304 -- target is validated to stay inside restore root.
 			if err != nil {
 				return fmt.Errorf("workspace: create file: %w", err)
 			}
@@ -415,6 +428,17 @@ func (m *LocalManager) extractTarGzIntoRoot(r io.Reader, root string) error {
 
 func (m *LocalManager) Cleanup() error {
 	return os.RemoveAll(m.cfg.Root)
+}
+
+func sanitizeArchiveFileMode(mode int64) os.FileMode {
+	if mode < 0 {
+		mode = 0
+	}
+	if mode > int64(math.MaxUint32) {
+		mode = int64(math.MaxUint32)
+	}
+	// Workspace files should remain private to the runtime identity.
+	return os.FileMode(uint32(mode)) & 0o600 // #nosec G115 -- mode is clamped to uint32 bounds above.
 }
 
 func (m *LocalManager) Usage() (int64, int) {
