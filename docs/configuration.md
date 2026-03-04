@@ -22,6 +22,8 @@ This document is the canonical environment-variable reference for AgentForge.
 | `AGENTFORGE_ALLOWED_MODEL_IDS` | _(built-in set)_ | Comma-separated allowlist used to validate `model_config.model_id` and fallback model IDs. |
 | `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | LLM request timeout. |
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai`. |
+| `OPENAI_API_KEY_SECRET_ARN` | _(empty)_ | Optional Secrets Manager secret ARN used to resolve OpenAI API key at startup. |
+| `OPENAI_API_KEY_SECRET_FIELD` | _(empty)_ | Optional JSON field name in the secret payload when secret value is a JSON object. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL. |
 
 ## Recovery Scheduler Variables
@@ -77,3 +79,6 @@ Required when `AGENTFORGE_RUNTIME=aws` for `cmd/taskapi`, `cmd/worker`, and `cmd
 ## Local Development
 
 Use `.env.example` as baseline and keep `AGENTFORGE_RUNTIME=local`.
+
+Notes:
+- `OPENAI_API_KEY` takes precedence over `OPENAI_API_KEY_SECRET_ARN` when both are set.

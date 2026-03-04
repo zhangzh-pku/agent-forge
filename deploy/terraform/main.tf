@@ -422,6 +422,19 @@ data "aws_iam_policy_document" "task_api_policy" {
   }
 
   dynamic "statement" {
+    for_each = var.openai_api_key_secret_arn != "" ? [1] : []
+    content {
+      sid    = "SecretsManagerReadOpenAIKey"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      resources = [var.openai_api_key_secret_arn]
+    }
+  }
+
+  dynamic "statement" {
     for_each = var.kms_key_arn != "" ? [1] : []
     content {
       sid    = "KMSDecryptArtifacts"
@@ -506,6 +519,19 @@ data "aws_iam_policy_document" "worker_policy" {
       aws_s3_bucket.artifacts.arn,
       "${aws_s3_bucket.artifacts.arn}/*",
     ]
+  }
+
+  dynamic "statement" {
+    for_each = var.openai_api_key_secret_arn != "" ? [1] : []
+    content {
+      sid    = "SecretsManagerReadOpenAIKey"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      resources = [var.openai_api_key_secret_arn]
+    }
   }
 
   dynamic "statement" {
@@ -616,6 +642,23 @@ data "archive_file" "lambda_placeholder" {
   }
 }
 
+locals {
+  task_api_lambda_filename         = trimspace(var.task_api_lambda_package_path) != "" ? var.task_api_lambda_package_path : data.archive_file.lambda_placeholder.output_path
+  task_api_lambda_source_code_hash = trimspace(var.task_api_lambda_package_path) != "" ? filebase64sha256(var.task_api_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+
+  worker_lambda_filename         = trimspace(var.worker_lambda_package_path) != "" ? var.worker_lambda_package_path : data.archive_file.lambda_placeholder.output_path
+  worker_lambda_source_code_hash = trimspace(var.worker_lambda_package_path) != "" ? filebase64sha256(var.worker_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+
+  recovery_lambda_filename         = trimspace(var.recovery_lambda_package_path) != "" ? var.recovery_lambda_package_path : data.archive_file.lambda_placeholder.output_path
+  recovery_lambda_source_code_hash = trimspace(var.recovery_lambda_package_path) != "" ? filebase64sha256(var.recovery_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+
+  ws_connect_lambda_filename         = trimspace(var.ws_connect_lambda_package_path) != "" ? var.ws_connect_lambda_package_path : data.archive_file.lambda_placeholder.output_path
+  ws_connect_lambda_source_code_hash = trimspace(var.ws_connect_lambda_package_path) != "" ? filebase64sha256(var.ws_connect_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+
+  ws_disconnect_lambda_filename         = trimspace(var.ws_disconnect_lambda_package_path) != "" ? var.ws_disconnect_lambda_package_path : data.archive_file.lambda_placeholder.output_path
+  ws_disconnect_lambda_source_code_hash = trimspace(var.ws_disconnect_lambda_package_path) != "" ? filebase64sha256(var.ws_disconnect_lambda_package_path) : data.archive_file.lambda_placeholder.output_base64sha256
+}
+
 # --- Task API Lambda ---
 # Handles REST API requests: create task, get task status, list runs, etc.
 resource "aws_lambda_function" "task_api" {
@@ -627,8 +670,8 @@ resource "aws_lambda_function" "task_api" {
   timeout       = 30
   memory_size   = 256
 
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  filename         = local.task_api_lambda_filename
+  source_code_hash = local.task_api_lambda_source_code_hash
 
   environment {
     variables = {
@@ -641,6 +684,15 @@ resource "aws_lambda_function" "task_api" {
       TASK_QUEUE_URL    = aws_sqs_queue.tasks.url
       ARTIFACTS_BUCKET  = aws_s3_bucket.artifacts.id
       ARTIFACT_SSE_KMS_KEY_ARN = var.kms_key_arn
+      OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
+      OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.environment == "dev" || trimspace(var.task_api_lambda_package_path) != ""
+      error_message = "task_api_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
     }
   }
 
@@ -663,8 +715,8 @@ resource "aws_lambda_function" "worker" {
   # Keep worker concurrency bounded to protect downstream LLM/provider quotas.
   reserved_concurrent_executions = 20
 
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  filename         = local.worker_lambda_filename
+  source_code_hash = local.worker_lambda_source_code_hash
 
   environment {
     variables = {
@@ -678,6 +730,15 @@ resource "aws_lambda_function" "worker" {
       ARTIFACTS_BUCKET   = aws_s3_bucket.artifacts.id
       ARTIFACT_SSE_KMS_KEY_ARN = var.kms_key_arn
       WEBSOCKET_ENDPOINT = aws_apigatewayv2_stage.websocket.invoke_url
+      OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
+      OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.environment == "dev" || trimspace(var.worker_lambda_package_path) != ""
+      error_message = "worker_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
     }
   }
 
@@ -697,8 +758,8 @@ resource "aws_lambda_function" "recovery" {
   timeout       = 120
   memory_size   = 256
 
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  filename         = local.recovery_lambda_filename
+  source_code_hash = local.recovery_lambda_source_code_hash
 
   environment {
     variables = {
@@ -720,6 +781,13 @@ resource "aws_lambda_function" "recovery" {
     }
   }
 
+  lifecycle {
+    precondition {
+      condition     = var.environment == "dev" || trimspace(var.recovery_lambda_package_path) != ""
+      error_message = "recovery_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
+    }
+  }
+
   tags = {
     Name = "agentforge-recovery"
   }
@@ -736,8 +804,8 @@ resource "aws_lambda_function" "ws_connect" {
   timeout       = 10
   memory_size   = 128
 
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  filename         = local.ws_connect_lambda_filename
+  source_code_hash = local.ws_connect_lambda_source_code_hash
 
   environment {
     variables = {
@@ -747,6 +815,13 @@ resource "aws_lambda_function" "ws_connect" {
       RUNS_TABLE        = aws_dynamodb_table.runs.name
       STEPS_TABLE       = aws_dynamodb_table.steps.name
       CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.environment == "dev" || trimspace(var.ws_connect_lambda_package_path) != ""
+      error_message = "ws_connect_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
     }
   }
 
@@ -766,8 +841,8 @@ resource "aws_lambda_function" "ws_disconnect" {
   timeout       = 10
   memory_size   = 128
 
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  filename         = local.ws_disconnect_lambda_filename
+  source_code_hash = local.ws_disconnect_lambda_source_code_hash
 
   environment {
     variables = {
@@ -777,6 +852,13 @@ resource "aws_lambda_function" "ws_disconnect" {
       RUNS_TABLE        = aws_dynamodb_table.runs.name
       STEPS_TABLE       = aws_dynamodb_table.steps.name
       CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.environment == "dev" || trimspace(var.ws_disconnect_lambda_package_path) != ""
+      error_message = "ws_disconnect_lambda_package_path is required for staging/prod to avoid placeholder Lambda deployment."
     }
   }
 

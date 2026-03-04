@@ -304,6 +304,8 @@ any external service.
 | `AGENTFORGE_LLM_PROVIDER` | `mock` | `mock` or `openai` |
 | `AGENTFORGE_LLM_MOCK_STEPS` | `3` | Number of mock tool-call steps before final answer |
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai` |
+| `OPENAI_API_KEY_SECRET_ARN` | _(empty)_ | Optional Secrets Manager secret ARN for loading `OPENAI_API_KEY` at startup |
+| `OPENAI_API_KEY_SECRET_FIELD` | _(empty)_ | Optional JSON field in secret payload that contains API key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `AGENTFORGE_LLM_MODEL` | `gpt-4o-mini` | Default model when request omits `model_config.model_id` |
 | `AGENTFORGE_LLM_ROUTING_DEFAULT_MODE` | `latency-first` | Router default mode: `latency-first`, `quality-first`, or `cost-cap` |
@@ -313,6 +315,8 @@ any external service.
 
 When a task includes `model_config.model_id`, that value overrides
 `AGENTFORGE_LLM_MODEL` for the run.
+When both `OPENAI_API_KEY` and `OPENAI_API_KEY_SECRET_ARN` are set, the direct
+`OPENAI_API_KEY` value takes precedence.
 
 ## AWS Deployment Overview
 
@@ -339,6 +343,10 @@ terraform apply
 Important: the current Terraform module provisions placeholder Lambda artifacts.
 Do not treat `terraform apply` output as production-ready until CI/CD replaces
 placeholders with real signed build artifacts.
+
+For production/staging, the module now requires explicit Lambda package paths
+(`*_lambda_package_path`) so placeholder artifacts cannot be deployed by mistake.
+See `docs/terraform.md` for packaging and apply flow.
 
 Terraform now includes a scheduled recovery Lambda (`agentforge-recovery-*`) and
 an EventBridge rule (`rate(5 minutes)` by default). Tune with:

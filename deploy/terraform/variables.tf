@@ -25,6 +25,53 @@ variable "kms_key_arn" {
   default     = ""
 }
 
+variable "openai_api_key_secret_arn" {
+  description = "Secrets Manager secret ARN used to resolve OPENAI_API_KEY at runtime (task_api/worker)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = var.openai_api_key_secret_arn == "" || can(regex("^arn:aws[a-z-]*:secretsmanager:[^:]+:[0-9]{12}:secret:.+", var.openai_api_key_secret_arn))
+    error_message = "openai_api_key_secret_arn must be empty or a full Secrets Manager secret ARN."
+  }
+}
+
+variable "openai_api_key_secret_field" {
+  description = "Optional JSON field in the secret payload that holds OPENAI_API_KEY."
+  type        = string
+  default     = ""
+}
+
+variable "task_api_lambda_package_path" {
+  description = "Local path to the task_api Lambda zip package (bootstrap binary). Required in staging/prod."
+  type        = string
+  default     = ""
+}
+
+variable "worker_lambda_package_path" {
+  description = "Local path to the worker Lambda zip package (bootstrap binary). Required in staging/prod."
+  type        = string
+  default     = ""
+}
+
+variable "recovery_lambda_package_path" {
+  description = "Local path to the recovery Lambda zip package (bootstrap binary). Required in staging/prod."
+  type        = string
+  default     = ""
+}
+
+variable "ws_connect_lambda_package_path" {
+  description = "Local path to the ws_connect Lambda zip package (bootstrap binary). Required in staging/prod."
+  type        = string
+  default     = ""
+}
+
+variable "ws_disconnect_lambda_package_path" {
+  description = "Local path to the ws_disconnect Lambda zip package (bootstrap binary). Required in staging/prod."
+  type        = string
+  default     = ""
+}
+
 variable "http_allowed_origins" {
   description = "CORS allowlist for HTTP API origins."
   type        = list(string)
