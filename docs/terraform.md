@@ -85,9 +85,16 @@ and grants `secretsmanager:GetSecretValue` / `DescribeSecret` to task_api + work
 ## Storage Defaults
 
 - Artifact bucket server access logging is enabled by default, delivered to a dedicated log bucket.
+- Artifact and access-log buckets enforce TLS-only requests (`aws:SecureTransport=true`).
 - Artifact bucket lifecycle policy:
   - current object versions transition to `STANDARD_IA` after 30 days
   - noncurrent versions expire after 180 days
+
+## Log Encryption Defaults
+
+- Lambda CloudWatch log groups are managed explicitly (retention + CMK encryption).
+- If `log_group_kms_key_arn` is empty, Terraform provisions a dedicated CMK and alias.
+- `log_retention_days` controls retention for all Lambda log groups.
 
 ## Tracing Toggles
 

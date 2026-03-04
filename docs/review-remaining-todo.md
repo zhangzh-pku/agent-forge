@@ -30,7 +30,6 @@
 |---|---|---|
 | R-312 | `CC-N12` | Lambda VPC 化与 VPC endpoints。 |
 | R-315 | `CC-N18` | 统一 step/event sort key 宽度策略。 |
-| R-318 | `SEC-NICE-01` | S3 强制 TLS 拒绝策略 + CloudWatch Log Group KMS CMK。 |
 | R-319 | `SEC-NICE-02` | 安全扫描门禁补齐剩余项：`gosec` 已接入硬门禁，`checkov` 已接入软门禁；下一步为收敛现有 Terraform 检查项并切换 `checkov` 为硬门禁，同时补 Must/Should 安全回归测试。 |
 | R-320 | `REL-N2` | 建立每日一致性巡检与周报。 |
 | R-321 | `REL-N3` | 分层 retention 与自动 compaction 计划任务。 |

@@ -375,6 +375,35 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   restrict_public_buckets = true
 }
 
+data "aws_iam_policy_document" "artifacts_tls_only" {
+  statement {
+    sid    = "DenyInsecureTransport"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.artifacts.arn,
+      "${aws_s3_bucket.artifacts.arn}/*",
+    ]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "artifacts_tls_only" {
+  bucket = aws_s3_bucket.artifacts.id
+  policy = data.aws_iam_policy_document.artifacts_tls_only.json
+}
+
 # Lifecycle policy for cost control and bounded storage growth:
 # - Current versions transition to STANDARD_IA after 30 days.
 # - Noncurrent versions expire after 180 days.
@@ -437,6 +466,28 @@ resource "aws_s3_bucket_public_access_block" "artifacts_access_logs" {
 
 data "aws_iam_policy_document" "artifacts_access_logs" {
   statement {
+    sid    = "DenyInsecureTransport"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.artifacts_access_logs.arn,
+      "${aws_s3_bucket.artifacts_access_logs.arn}/*",
+    ]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  statement {
     sid    = "AllowS3ServerAccessLogsAclCheck"
     effect = "Allow"
 
@@ -497,6 +548,68 @@ resource "aws_s3_bucket_logging" "artifacts" {
   target_prefix = "s3-access/"
 
   depends_on = [aws_s3_bucket_policy.artifacts_access_logs]
+}
+
+# =============================================================================
+# KMS - CloudWatch Logs Encryption
+# =============================================================================
+
+locals {
+  log_group_kms_key_arn = trimspace(var.log_group_kms_key_arn) != "" ? trimspace(var.log_group_kms_key_arn) : aws_kms_key.cloudwatch_logs[0].arn
+}
+
+data "aws_iam_policy_document" "cloudwatch_logs_kms" {
+  statement {
+    sid    = "EnableRootPermissions"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    actions   = ["kms:*"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "AllowCloudWatchLogsUsage"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["logs.${data.aws_region.current.name}.amazonaws.com"]
+    }
+
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "ArnLike"
+      variable = "kms:EncryptionContext:aws:logs:arn"
+      values   = ["arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:*"]
+    }
+  }
+}
+
+resource "aws_kms_key" "cloudwatch_logs" {
+  count                   = trimspace(var.log_group_kms_key_arn) == "" ? 1 : 0
+  description             = "AgentForge CloudWatch Logs CMK (${var.environment})"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.cloudwatch_logs_kms.json
+}
+
+resource "aws_kms_alias" "cloudwatch_logs" {
+  count         = trimspace(var.log_group_kms_key_arn) == "" ? 1 : 0
+  name          = "alias/agentforge-cloudwatch-logs-${var.environment}"
+  target_key_id = aws_kms_key.cloudwatch_logs[0].key_id
 }
 
 # =============================================================================
@@ -1142,6 +1255,37 @@ resource "aws_lambda_function" "ws_disconnect" {
   tags = {
     Name = "agentforge-ws-disconnect"
   }
+}
+
+# CloudWatch log groups are explicitly managed to enforce retention and CMK encryption.
+resource "aws_cloudwatch_log_group" "task_api_lambda" {
+  name              = "/aws/lambda/agentforge-task-api-${var.environment}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = local.log_group_kms_key_arn
+}
+
+resource "aws_cloudwatch_log_group" "worker_lambda" {
+  name              = "/aws/lambda/agentforge-worker-${var.environment}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = local.log_group_kms_key_arn
+}
+
+resource "aws_cloudwatch_log_group" "recovery_lambda" {
+  name              = "/aws/lambda/agentforge-recovery-${var.environment}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = local.log_group_kms_key_arn
+}
+
+resource "aws_cloudwatch_log_group" "ws_connect_lambda" {
+  name              = "/aws/lambda/agentforge-ws-connect-${var.environment}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = local.log_group_kms_key_arn
+}
+
+resource "aws_cloudwatch_log_group" "ws_disconnect_lambda" {
+  name              = "/aws/lambda/agentforge-ws-disconnect-${var.environment}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = local.log_group_kms_key_arn
 }
 
 # =============================================================================
