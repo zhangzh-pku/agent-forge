@@ -53,7 +53,6 @@
 | ID | Source | TODO |
 |---|---|---|
 | R-201 | `CC-T1` | DynamoStore 测试从“基础集成”补齐到完整 CRUD/条件写/事务语义覆盖。 |
-| R-202 | `CC-T2` | 增加 S3 LocalStack 集成测试（Put/Get/Exists/PresignedURL/加密）。 |
 | R-203 | `CC-T3`, `REL-N1` | SQS 集成/契约测试补齐（重复投递、DLQ、删除失败、续租失败等）。 |
 | R-204 | `CC-T4` | `make test` 与 `-race` 策略统一（按约定强制）。 |
 | R-205 | `CC-T5` | 新增 `finish_reason="length"` 场景回归测试。 |
