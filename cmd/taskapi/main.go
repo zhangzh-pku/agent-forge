@@ -105,6 +105,10 @@ func main() {
 		}
 		writeJSON(w, statusCode, resp)
 	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		snap := api.SnapshotRequestMetrics()
+		writePrometheusMetrics(w, snap)
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + port,
@@ -211,6 +215,39 @@ func writeJSON(w http.ResponseWriter, code int, data interface{}) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("json encode failed: %v", err)
 	}
+}
+
+func writePrometheusMetrics(w http.ResponseWriter, snap api.RequestMetricsSnapshot) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_requests_total Total HTTP requests processed by AuthMiddleware.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_requests_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_http_requests_total %d\n", snap.RequestsTotal)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_request_latency_ms_total Cumulative request latency in milliseconds.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_request_latency_ms_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_http_request_latency_ms_total %d\n", snap.LatencyMSTotal)
+
+	avgLatency := 0.0
+	if snap.RequestsTotal > 0 {
+		avgLatency = float64(snap.LatencyMSTotal) / float64(snap.RequestsTotal)
+	}
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_request_latency_ms_avg Average request latency in milliseconds.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_request_latency_ms_avg gauge\n")
+	_, _ = fmt.Fprintf(w, "agentforge_http_request_latency_ms_avg %.6f\n", avgLatency)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_responses_total Total HTTP responses by status class.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_responses_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_http_responses_total{code_class=\"1xx\"} %d\n", snap.Status1xx)
+	_, _ = fmt.Fprintf(w, "agentforge_http_responses_total{code_class=\"2xx\"} %d\n", snap.Status2xx)
+	_, _ = fmt.Fprintf(w, "agentforge_http_responses_total{code_class=\"3xx\"} %d\n", snap.Status3xx)
+	_, _ = fmt.Fprintf(w, "agentforge_http_responses_total{code_class=\"4xx\"} %d\n", snap.Status4xx)
+	_, _ = fmt.Fprintf(w, "agentforge_http_responses_total{code_class=\"5xx\"} %d\n", snap.Status5xx)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_5xx_total Total HTTP 5xx responses.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_5xx_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_http_5xx_total %d\n", snap.Errors5xxTotal)
 }
 
 func initRuntime(ctx context.Context) (state.Store, artstore.Store, queue.Queue, stream.Pusher, bool, string, error) {

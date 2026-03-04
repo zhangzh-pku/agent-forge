@@ -103,12 +103,14 @@ func logRequest(r *http.Request, w *loggingResponseWriter, startedAt time.Time, 
 	if status == 0 {
 		status = http.StatusOK
 	}
+	latencyMS := time.Since(startedAt).Milliseconds()
+	observeRequestMetrics(status, latencyMS)
 	log.Printf(
 		"request method=%s path=%s status=%d latency_ms=%d request_id=%s tenant_id=%s user_id=%s bytes=%d",
 		r.Method,
 		r.URL.Path,
 		status,
-		time.Since(startedAt).Milliseconds(),
+		latencyMS,
 		requestID,
 		tenantID,
 		userID,

@@ -147,6 +147,44 @@ func TestAuthMiddlewareLogsStructuredRequestFields(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareRecordsRequestMetrics(t *testing.T) {
+	t.Setenv("AGENTFORGE_AUTH_MODE", "header")
+	resetRequestMetricsForTest()
+	t.Cleanup(resetRequestMetricsForTest)
+
+	handler := AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+
+	okReq := httptest.NewRequest(http.MethodPost, "/tasks", nil)
+	okReq.Header.Set("X-Tenant-Id", "tnt_1")
+	okReq.Header.Set("X-User-Id", "user_1")
+	okReqRec := httptest.NewRecorder()
+	handler.ServeHTTP(okReqRec, okReq)
+
+	badReq := httptest.NewRequest(http.MethodPost, "/tasks", nil)
+	badReq.Header.Set("X-Tenant-Id", "tnt_1")
+	badReqRec := httptest.NewRecorder()
+	handler.ServeHTTP(badReqRec, badReq)
+
+	snap := SnapshotRequestMetrics()
+	if snap.RequestsTotal != 2 {
+		t.Fatalf("expected 2 total requests, got %d", snap.RequestsTotal)
+	}
+	if snap.Status2xx != 1 {
+		t.Fatalf("expected 1 success response, got %d", snap.Status2xx)
+	}
+	if snap.Status4xx != 1 {
+		t.Fatalf("expected 1 auth rejection response, got %d", snap.Status4xx)
+	}
+	if snap.Status5xx != 0 {
+		t.Fatalf("expected 0 server errors, got %d", snap.Status5xx)
+	}
+	if snap.LatencyMSTotal < 0 {
+		t.Fatalf("expected non-negative latency total, got %d", snap.LatencyMSTotal)
+	}
+}
+
 func captureStdLogger(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
 	var buf bytes.Buffer
