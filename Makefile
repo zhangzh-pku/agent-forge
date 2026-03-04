@@ -1,6 +1,8 @@
-.PHONY: build build-lambda build-lambda-zip fmt fmt-check vet test test-race lint vuln artifact-audit iam-audit ci clean
+.PHONY: build build-lambda build-lambda-zip fmt fmt-check vet test test-race lint lint-install vuln artifact-audit iam-audit ci clean
 
 GO ?= go
+GOLANGCI_LINT_VERSION ?= v1.64.8
+GOLANGCI_LINT ?= $(CURDIR)/bin/golangci-lint
 
 # Build all binaries into bin/
 build:
@@ -63,10 +65,17 @@ test-race:
 	$(GO) test -race ./...
 
 # Lint checks (non-mutating)
-lint:
+lint: lint-install
 	$(MAKE) fmt-check
 	$(MAKE) vet
-	golangci-lint run ./...
+	$(GOLANGCI_LINT) run ./...
+
+lint-install:
+	@mkdir -p bin
+	@if [ ! -x "$(GOLANGCI_LINT)" ]; then \
+		echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)"; \
+		GOBIN="$(CURDIR)/bin" $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+	fi
 
 # Dependency vulnerability checks
 vuln:
