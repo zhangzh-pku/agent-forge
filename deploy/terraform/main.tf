@@ -397,6 +397,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 }
 
 # Dedicated log bucket for S3 server access logs.
+#tfsec:ignore:aws-s3-enable-bucket-logging Access-log sink bucket is the terminal log destination; enabling logging on it would recurse.
 resource "aws_s3_bucket" "artifacts_access_logs" {
   bucket = "agentforge-artifacts-logs-${var.environment}-${data.aws_caller_identity.current.account_id}"
 
@@ -748,9 +749,11 @@ data "aws_iam_policy_document" "recovery_policy" {
     ]
     resources = [
       aws_dynamodb_table.tasks.arn,
-      "${aws_dynamodb_table.tasks.arn}/index/*",
+      "${aws_dynamodb_table.tasks.arn}/index/tenant-created-index",
+      "${aws_dynamodb_table.tasks.arn}/index/entity-created-index",
       aws_dynamodb_table.runs.arn,
-      "${aws_dynamodb_table.runs.arn}/index/*",
+      "${aws_dynamodb_table.runs.arn}/index/tenant-run-index",
+      "${aws_dynamodb_table.runs.arn}/index/entity-run-index",
       aws_dynamodb_table.steps.arn,
     ]
   }
