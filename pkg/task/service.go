@@ -136,7 +136,7 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		ModelConfig: normalizedMC,
 	}
 
-	if err := s.store.PutTask(ctx, task); err != nil {
+	if err := s.store.ApplyCreateTransition(ctx, task, run); err != nil {
 		if errors.Is(err, state.ErrAlreadyExists) && req.IdempotencyKey != "" {
 			// Race condition: another request created it. Fetch and return.
 			existing, err2 := s.store.GetTaskByIdempotencyKey(ctx, req.TenantID, req.IdempotencyKey)
@@ -145,10 +145,6 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 			}
 			return &CreateResponse{TaskID: existing.TaskID, RunID: existing.ActiveRunID}, nil
 		}
-		return nil, err
-	}
-
-	if err := s.store.PutRun(ctx, run); err != nil {
 		return nil, err
 	}
 

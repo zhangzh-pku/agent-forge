@@ -83,6 +83,76 @@ func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStor
 
 // --- TaskStore ---
 
+func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Task, run *model.Run) error {
+	if task == nil || run == nil || task.TaskID == "" || run.TaskID == "" || run.RunID == "" {
+		return ErrConflict
+	}
+	if run.TaskID != task.TaskID {
+		return ErrConflict
+	}
+
+	taskItem, err := attributevalue.MarshalMap(task)
+	if err != nil {
+		return fmt.Errorf("state: marshal create task: %w", err)
+	}
+	taskItem["pk"] = avString(taskPK(task.TaskID))
+	taskItem["sk"] = avString(taskMetaSK)
+	taskItem["entity"] = avString("task")
+
+	runItem, err := attributevalue.MarshalMap(run)
+	if err != nil {
+		return fmt.Errorf("state: marshal create run: %w", err)
+	}
+	runItem["pk"] = avString(runPK(run.TaskID))
+	runItem["sk"] = avString(runSK(run.RunID))
+	runItem["entity"] = avString("run")
+
+	transactItems := []dbtypes.TransactWriteItem{
+		{Put: &dbtypes.Put{
+			TableName:           aws.String(s.tasksTable),
+			Item:                taskItem,
+			ConditionExpression: aws.String("attribute_not_exists(pk) AND attribute_not_exists(sk)"),
+		}},
+		{Put: &dbtypes.Put{
+			TableName:           aws.String(s.runsTable),
+			Item:                runItem,
+			ConditionExpression: aws.String("attribute_not_exists(pk) AND attribute_not_exists(sk)"),
+		}},
+	}
+
+	if task.IdempotencyKey != "" {
+		idCreatedAt := task.CreatedAt
+		if idCreatedAt.IsZero() {
+			idCreatedAt = time.Now().UTC()
+		}
+		idItem := map[string]dbtypes.AttributeValue{
+			"pk":              avString(idempotencyPK(task.TenantID, task.IdempotencyKey)),
+			"sk":              avString(taskMetaSK),
+			"entity":          avString("idempotency"),
+			"tenant_id":       avString(task.TenantID),
+			"idempotency_key": avString(task.IdempotencyKey),
+			"task_id":         avString(task.TaskID),
+			"created_at":      avTime(idCreatedAt),
+		}
+		transactItems = append(transactItems, dbtypes.TransactWriteItem{Put: &dbtypes.Put{
+			TableName:           aws.String(s.tasksTable),
+			Item:                idItem,
+			ConditionExpression: aws.String("attribute_not_exists(pk) AND attribute_not_exists(sk)"),
+		}})
+	}
+
+	_, err = s.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: transactItems,
+	})
+	if err != nil {
+		if isConditionalCheckFailed(err) || isTransactionConditionFailed(err) {
+			return ErrAlreadyExists
+		}
+		return fmt.Errorf("state: apply create transition: %w", err)
+	}
+	return nil
+}
+
 func (s *DynamoStore) PutTask(ctx context.Context, task *model.Task) error {
 	if task == nil || task.TaskID == "" {
 		return fmt.Errorf("state: put task: invalid task")

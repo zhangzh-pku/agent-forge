@@ -19,6 +19,8 @@ var (
 
 // TaskStore persists task metadata.
 type TaskStore interface {
+	// ApplyCreateTransition atomically creates the initial task+run pair.
+	ApplyCreateTransition(ctx context.Context, task *model.Task, run *model.Run) error
 	// PutTask creates a new task. Returns ErrAlreadyExists if idempotency_key collides.
 	PutTask(ctx context.Context, task *model.Task) error
 	// GetTask retrieves a task by ID. Returns ErrNotFound if missing.

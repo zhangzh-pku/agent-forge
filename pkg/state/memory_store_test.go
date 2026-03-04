@@ -259,6 +259,115 @@ func TestSetActiveRun(t *testing.T) {
 	}
 }
 
+func TestApplyCreateTransitionAtomicSuccess(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	task := &model.Task{
+		TaskID:         "task_1",
+		TenantID:       "tnt_1",
+		UserID:         "user_1",
+		Status:         model.TaskStatusQueued,
+		ActiveRunID:    "run_1",
+		IdempotencyKey: "idem_1",
+		Prompt:         "test prompt",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	run := &model.Run{
+		TaskID:      "task_1",
+		RunID:       "run_1",
+		TenantID:    "tnt_1",
+		Status:      model.RunStatusQueued,
+		ModelConfig: task.ModelConfig,
+	}
+
+	if err := s.ApplyCreateTransition(ctx, task, run); err != nil {
+		t.Fatalf("ApplyCreateTransition error: %v", err)
+	}
+
+	gotTask, err := s.GetTask(ctx, "task_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTask.ActiveRunID != "run_1" {
+		t.Fatalf("expected active run run_1, got %s", gotTask.ActiveRunID)
+	}
+
+	gotRun, err := s.GetRun(ctx, "task_1", "run_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.Status != model.RunStatusQueued {
+		t.Fatalf("expected queued run, got %s", gotRun.Status)
+	}
+
+	gotByIDKey, err := s.GetTaskByIdempotencyKey(ctx, "tnt_1", "idem_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotByIDKey.TaskID != "task_1" {
+		t.Fatalf("expected idempotency lookup task_1, got %s", gotByIDKey.TaskID)
+	}
+}
+
+func TestApplyCreateTransitionNoPartialOnConflict(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	existingTask := &model.Task{
+		TaskID:         "task_existing",
+		TenantID:       "tnt_1",
+		UserID:         "user_1",
+		Status:         model.TaskStatusQueued,
+		ActiveRunID:    "run_existing",
+		IdempotencyKey: "idem_1",
+		Prompt:         "existing",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	existingRun := &model.Run{
+		TaskID:   "task_existing",
+		RunID:    "run_existing",
+		TenantID: "tnt_1",
+		Status:   model.RunStatusQueued,
+	}
+	if err := s.ApplyCreateTransition(ctx, existingTask, existingRun); err != nil {
+		t.Fatalf("seed ApplyCreateTransition error: %v", err)
+	}
+
+	// New task with conflicting idempotency key should fail atomically.
+	newTask := &model.Task{
+		TaskID:         "task_new",
+		TenantID:       "tnt_1",
+		UserID:         "user_1",
+		Status:         model.TaskStatusQueued,
+		ActiveRunID:    "run_new",
+		IdempotencyKey: "idem_1",
+		Prompt:         "new",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	newRun := &model.Run{
+		TaskID:   "task_new",
+		RunID:    "run_new",
+		TenantID: "tnt_1",
+		Status:   model.RunStatusQueued,
+	}
+	if err := s.ApplyCreateTransition(ctx, newTask, newRun); err != ErrAlreadyExists {
+		t.Fatalf("expected ErrAlreadyExists, got %v", err)
+	}
+
+	if _, err := s.GetTask(ctx, "task_new"); err != ErrNotFound {
+		t.Fatalf("expected no task_new created, got err=%v", err)
+	}
+	if _, err := s.GetRun(ctx, "task_new", "run_new"); err != ErrNotFound {
+		t.Fatalf("expected no run_new created, got err=%v", err)
+	}
+}
+
 func TestApplyResumeTransitionAtomicSuccess(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()

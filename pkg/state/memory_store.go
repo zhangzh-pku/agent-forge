@@ -117,6 +117,37 @@ func cloneEvent(ev *model.StreamEvent) *model.StreamEvent {
 
 // --- TaskStore ---
 
+func (s *MemoryStore) ApplyCreateTransition(_ context.Context, task *model.Task, run *model.Run) error {
+	if task == nil || run == nil || task.TaskID == "" || run.TaskID == "" || run.RunID == "" {
+		return ErrConflict
+	}
+	if run.TaskID != task.TaskID {
+		return ErrConflict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.tasks[task.TaskID]; exists {
+		return ErrAlreadyExists
+	}
+	if _, exists := s.runs[runKey(run.TaskID, run.RunID)]; exists {
+		return ErrAlreadyExists
+	}
+
+	if task.IdempotencyKey != "" {
+		ik := idempKey(task.TenantID, task.IdempotencyKey)
+		if _, exists := s.idempotency[ik]; exists {
+			return ErrAlreadyExists
+		}
+		s.idempotency[ik] = task.TaskID
+	}
+
+	s.tasks[task.TaskID] = cloneTask(task)
+	s.runs[runKey(run.TaskID, run.RunID)] = cloneRun(run)
+	return nil
+}
+
 func (s *MemoryStore) PutTask(_ context.Context, task *model.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
