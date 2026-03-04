@@ -119,6 +119,13 @@ func (s *S3Store) PresignedURL(ctx context.Context, key string) (string, error) 
 	if key == "" {
 		return "", fmt.Errorf("artifact: key is required")
 	}
+	exists, err := s.Exists(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", ErrNotFound
+	}
 
 	out, err := s.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
