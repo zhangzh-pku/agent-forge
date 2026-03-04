@@ -1,0 +1,86 @@
+services:
+  taskapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: taskapi
+    image: agentforge/taskapi:dev
+    environment:
+      AGENTFORGE_RUNTIME: local
+      AGENTFORGE_AUTH_MODE: header
+      AGENTFORGE_LLM_PROVIDER: mock
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  localstack:
+    image: localstack/localstack:4.3
+    profiles: ["aws-localstack"]
+    environment:
+      SERVICES: dynamodb,s3,sqs
+      AWS_DEFAULT_REGION: us-east-1
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - ./examples/localstack/init.sh:/etc/localstack/init/ready.d/init.sh:ro
+
+  taskapi-aws:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: taskapi
+    image: agentforge/taskapi-aws:dev
+    profiles: ["aws-localstack"]
+    depends_on:
+      - localstack
+    environment:
+      AGENTFORGE_RUNTIME: aws
+      AGENTFORGE_AUTH_MODE: header
+      AGENTFORGE_LLM_PROVIDER: mock
+      PORT: "8080"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+      TASKS_TABLE: agentforge-tasks-local
+      RUNS_TABLE: agentforge-runs-local
+      STEPS_TABLE: agentforge-steps-local
+      CONNECTIONS_TABLE: agentforge-connections-local
+      CONNECTIONS_TASK_INDEX: task-index
+      TASK_QUEUE_URL: http://localstack:4566/000000000000/agentforge-tasks-local
+      ARTIFACTS_BUCKET: agentforge-artifacts-local
+    ports:
+      - "18080:8080"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: worker
+    image: agentforge/worker:dev
+    profiles: ["aws-localstack"]
+    depends_on:
+      - localstack
+    environment:
+      AGENTFORGE_RUNTIME: aws
+      AGENTFORGE_LLM_PROVIDER: mock
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+      TASKS_TABLE: agentforge-tasks-local
+      RUNS_TABLE: agentforge-runs-local
+      STEPS_TABLE: agentforge-steps-local
+      CONNECTIONS_TABLE: agentforge-connections-local
+      CONNECTIONS_TASK_INDEX: task-index
+      TASK_QUEUE_URL: http://localstack:4566/000000000000/agentforge-tasks-local
+      ARTIFACTS_BUCKET: agentforge-artifacts-local
+
+volumes:
+  localstack-data:

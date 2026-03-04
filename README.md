@@ -127,6 +127,28 @@ Key docs:
 go test ./...
 ```
 
+### Run with Docker Compose
+
+```bash
+docker compose up --build taskapi
+```
+
+Then call the versioned API endpoint:
+
+```bash
+curl -s -X POST http://localhost:8080/v1/tasks \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-Id: acme" \
+  -H "X-User-Id: alice" \
+  -d '{"prompt":"List the prime numbers under 20"}' | jq .
+```
+
+You can also run the scripted flow:
+
+```bash
+./examples/quickstart.sh
+```
+
 ### Bootstrap Local Env
 
 ```bash
