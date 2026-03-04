@@ -895,6 +895,61 @@ func TestEngineUnknownToolHandling(t *testing.T) {
 	}
 }
 
+func TestEnginePersistsAllToolOutputsForMultiToolStep(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	llm := &multiToolLLM{}
+	registry := NewRegistry()
+	for _, tool := range NewFSTools(h.ws) {
+		registry.Register(tool)
+	}
+
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, registry, h.pusher)
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s (error: %s)", result.Status, result.ErrorMessage)
+	}
+
+	step, err := h.store.GetStep(context.Background(), h.run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Type != model.StepTypeToolCall {
+		t.Fatalf("expected first step to be tool_call, got %s", step.Type)
+	}
+
+	var outputs []persistedToolOutput
+	if err := json.Unmarshal([]byte(step.Output), &outputs); err != nil {
+		t.Fatalf("expected JSON array of tool outputs, got %q: %v", step.Output, err)
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 persisted tool outputs, got %d", len(outputs))
+	}
+
+	var sawA, sawB bool
+	for _, out := range outputs {
+		if out.Tool != "fs.write" {
+			t.Fatalf("expected tool fs.write, got %q", out.Tool)
+		}
+		if out.ToolCallID == "" {
+			t.Fatal("expected tool_call_id to be persisted")
+		}
+		if strings.Contains(out.Output, "a.txt") {
+			sawA = true
+		}
+		if strings.Contains(out.Output, "b.txt") {
+			sawB = true
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatalf("expected outputs for both writes, got %+v", outputs)
+	}
+}
+
 func TestEngineStreamPushTenantIsolation(t *testing.T) {
 	h := setupHarness(t)
 	defer h.cleanup()
@@ -1120,6 +1175,30 @@ func (l *unknownToolLLM) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, e
 	return &LLMResponse{
 		Content:      "Done",
 		TokenUsage:   &model.TokenUsage{Input: 10, Output: 5, Total: 15},
+		FinishReason: "stop",
+	}, nil
+}
+
+type multiToolLLM struct {
+	calls int
+}
+
+func (l *multiToolLLM) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, error) {
+	l.calls++
+	if l.calls == 1 {
+		return &LLMResponse{
+			Content: "Running multiple file writes",
+			ToolCalls: []ToolCall{
+				{ID: "call_a", Name: "fs.write", Args: `{"path":"a.txt","content":"A"}`},
+				{ID: "call_b", Name: "fs.write", Args: `{"path":"b.txt","content":"B"}`},
+			},
+			TokenUsage:   &model.TokenUsage{Input: 12, Output: 8, Total: 20},
+			FinishReason: "tool_calls",
+		}, nil
+	}
+	return &LLMResponse{
+		Content:      "Done",
+		TokenUsage:   &model.TokenUsage{Input: 4, Output: 2, Total: 6},
 		FinishReason: "stop",
 	}, nil
 }

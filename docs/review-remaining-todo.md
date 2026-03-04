@@ -31,7 +31,6 @@
 | R-104 | `CC-E4` | `fs.export` goroutine 生命周期治理（`ctx.Done`/`errgroup`）。 |
 | R-105 | `CC-E5` | 执行期强制 token/cost cap（超过后 graceful stop）。 |
 | R-106 | `CC-E6` | Step 大字段（Input/Output）超过阈值时落 S3，仅存引用。 |
-| R-107 | `CC-E7` | 单步多 tool call 输出完整持久化（非“只保留最后一个”）。 |
 | R-108 | `CC-E8` | 流式请求使用独立 `http.Client`（`Timeout=0`）并依赖 context 控时。 |
 | R-109 | `CC-E9` | `shouldFallbackOnError` 默认改为 false，仅白名单错误触发 fallback。 |
 | R-110 | `CC-E10` | 429 重试读取 `Retry-After` 作为 backoff 下限。 |

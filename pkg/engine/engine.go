@@ -90,6 +90,12 @@ type RunResult struct {
 	TotalCostUSD float64
 }
 
+type persistedToolOutput struct {
+	Tool       string `json:"tool"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Output     string `json:"output"`
+}
+
 // Execute runs the ReAct loop for a given task and run.
 func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, ws workspace.Manager) (*RunResult, error) {
 	log := e.log.With("task_id", task.TaskID).With("run_id", run.RunID).With("tenant_id", task.TenantID).With("trace_id", util.NewID("tr_"))
@@ -292,14 +298,16 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 
 		if len(llmResp.ToolCalls) > 0 {
 			stepType = model.StepTypeToolCall
+			toolOutputs := make([]persistedToolOutput, 0, len(llmResp.ToolCalls))
 			for _, tc := range llmResp.ToolCalls {
 				e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventToolCall, map[string]interface{}{
 					"tool": tc.Name, "args": tc.Args,
 				})
 
+				currentToolOutput := ""
 				tool := e.tools.Get(tc.Name)
 				if tool == nil {
-					toolOutput = fmt.Sprintf("error: unknown tool %q", tc.Name)
+					currentToolOutput = fmt.Sprintf("error: unknown tool %q", tc.Name)
 				} else {
 					result, err := tool.Execute(ctx, tc.Args)
 					if err != nil {
@@ -318,22 +326,33 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 							TotalCostUSD: totalCost,
 						}, nil
 					} else if result.Error != "" {
-						toolOutput = fmt.Sprintf("error: %s", result.Error)
+						currentToolOutput = fmt.Sprintf("error: %s", result.Error)
 					} else {
-						toolOutput = result.Output
+						currentToolOutput = result.Output
 					}
 				}
+				toolOutput = currentToolOutput
+				toolOutputs = append(toolOutputs, persistedToolOutput{
+					Tool:       tc.Name,
+					ToolCallID: tc.ID,
+					Output:     currentToolOutput,
+				})
 
 				e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventToolResult, map[string]interface{}{
-					"tool": tc.Name, "output": toolOutput,
+					"tool": tc.Name, "output": currentToolOutput,
 				})
 
 				// Append tool result to memory.
 				mem.Messages = append(mem.Messages, model.MemoryMessage{
 					Role:       model.MessageRoleTool,
 					ToolCallID: tc.ID,
-					Content:    toolOutput,
+					Content:    currentToolOutput,
 				})
+			}
+			if len(toolOutputs) > 1 {
+				if b, err := json.Marshal(toolOutputs); err == nil {
+					toolOutput = string(b)
+				}
 			}
 		}
 
