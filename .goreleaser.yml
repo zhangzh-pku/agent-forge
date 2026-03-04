@@ -1,0 +1,91 @@
+version: 2
+
+project_name: agentforge
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: taskapi
+    main: ./cmd/taskapi
+    binary: taskapi
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: worker
+    main: ./cmd/worker
+    binary: worker
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: recovery
+    main: ./cmd/recovery
+    binary: recovery
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: wsconnect
+    main: ./cmd/wsconnect
+    binary: wsconnect
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: wsdisconnect
+    main: ./cmd/wsdisconnect
+    binary: wsdisconnect
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: ["tar.gz"]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+
+release:
+  github:
+    owner: zhangzh-pku
+    name: agent-forge
+
