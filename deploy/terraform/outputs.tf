@@ -39,6 +39,11 @@ output "artifacts_bucket_name" {
   value       = aws_s3_bucket.artifacts.id
 }
 
+output "artifacts_access_logs_bucket_name" {
+  description = "S3 bucket name for artifact access logs"
+  value       = aws_s3_bucket.artifacts_access_logs.id
+}
+
 # -----------------------------------------------------------------------------
 # DynamoDB Table Names
 # -----------------------------------------------------------------------------

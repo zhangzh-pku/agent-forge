@@ -4,9 +4,9 @@ This guide covers safe deployment with `deploy/terraform`.
 
 ## What This Module Creates
 
-- SQS primary queue + DLQ
+- SQS primary queue + DLQ (both 14-day retention)
 - DynamoDB tables: tasks, runs, steps, connections
-- S3 artifact bucket
+- S3 artifact bucket + dedicated S3 access-log bucket
 - Lambda functions: `task_api`, `worker`, `recovery`, `ws_connect`, `ws_disconnect`
 - API Gateway HTTP + WebSocket APIs
 - CloudWatch alarms/dashboard
@@ -81,6 +81,13 @@ and grants `secretsmanager:GetSecretValue` / `DescribeSecret` to task_api + work
 - `waf_enabled=true` enables AWS WAF on HTTP API stage.
 - `http_jwt_authorizer_enabled=true` enables JWT authorizer on HTTP API.
 - `websocket_authorizer_enabled=true` enables REQUEST authorizer on WebSocket `$connect`.
+
+## Storage Defaults
+
+- Artifact bucket server access logging is enabled by default, delivered to a dedicated log bucket.
+- Artifact bucket lifecycle policy:
+  - current object versions transition to `STANDARD_IA` after 30 days
+  - noncurrent versions expire after 180 days
 
 ## Tracing Toggles
 

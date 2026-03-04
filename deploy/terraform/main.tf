@@ -67,9 +67,9 @@ resource "aws_sqs_queue" "tasks_dlq" {
 # Messages that fail 3 times are redirected to the DLQ for manual inspection.
 resource "aws_sqs_queue" "tasks" {
   name                       = "agentforge-tasks-${var.environment}"
-  visibility_timeout_seconds = 900   # 15 min - must exceed Lambda timeout
-  message_retention_seconds  = 86400 # 1 day
-  receive_wait_time_seconds  = 20    # Long polling to reduce empty receives
+  visibility_timeout_seconds = 900     # 15 min - must exceed Lambda timeout
+  message_retention_seconds  = 1209600 # 14 days - align with DLQ for longer replay window
+  receive_wait_time_seconds  = 20      # Long polling to reduce empty receives
 
   # SSE-KMS encryption at rest
   sqs_managed_sse_enabled = var.kms_key_arn == "" ? true : false
@@ -334,7 +334,6 @@ resource "aws_dynamodb_table" "connections" {
 # KMS, versioned for auditability, and fully locked down against public access.
 # =============================================================================
 
-#tfsec:ignore:aws-s3-enable-bucket-logging R-311 (remaining TODO): access logging bucket rollout is tracked separately.
 resource "aws_s3_bucket" "artifacts" {
   bucket = "agentforge-artifacts-${var.environment}-${data.aws_caller_identity.current.account_id}"
 
@@ -374,6 +373,129 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+# Lifecycle policy for cost control and bounded storage growth:
+# - Current versions transition to STANDARD_IA after 30 days.
+# - Noncurrent versions expire after 180 days.
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    id     = "artifacts-tiering-and-expiry"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 180
+    }
+  }
+}
+
+# Dedicated log bucket for S3 server access logs.
+resource "aws_s3_bucket" "artifacts_access_logs" {
+  bucket = "agentforge-artifacts-logs-${var.environment}-${data.aws_caller_identity.current.account_id}"
+
+  tags = {
+    Name = "agentforge-artifacts-access-logs"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "artifacts_access_logs" {
+  bucket = aws_s3_bucket.artifacts_access_logs.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_access_logs" {
+  bucket = aws_s3_bucket.artifacts_access_logs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = var.kms_key_arn != "" ? var.kms_key_arn : null
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts_access_logs" {
+  bucket = aws_s3_bucket.artifacts_access_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+data "aws_iam_policy_document" "artifacts_access_logs" {
+  statement {
+    sid    = "AllowS3ServerAccessLogsAclCheck"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["logging.s3.amazonaws.com"]
+    }
+
+    actions = ["s3:GetBucketAcl"]
+    resources = [
+      aws_s3_bucket.artifacts_access_logs.arn,
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  statement {
+    sid    = "AllowS3ServerAccessLogsWrite"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["logging.s3.amazonaws.com"]
+    }
+
+    actions = ["s3:PutObject"]
+    resources = [
+      "${aws_s3_bucket.artifacts_access_logs.arn}/s3-access/*",
+    ]
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = [aws_s3_bucket.artifacts.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "artifacts_access_logs" {
+  bucket = aws_s3_bucket.artifacts_access_logs.id
+  policy = data.aws_iam_policy_document.artifacts_access_logs.json
+}
+
+resource "aws_s3_bucket_logging" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  target_bucket = aws_s3_bucket.artifacts_access_logs.id
+  target_prefix = "s3-access/"
+
+  depends_on = [aws_s3_bucket_policy.artifacts_access_logs]
 }
 
 # =============================================================================

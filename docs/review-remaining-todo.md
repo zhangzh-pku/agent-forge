@@ -23,7 +23,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-221 | `CC-C19` | 清理历史中误提交的构建产物（`bin/`）。 |
 
 ## P3 - 长期增强与加固
 
@@ -34,9 +33,6 @@
 | R-305 | `CC-N5` | `Workspace.Snapshot` 降低持锁时间。 |
 | R-307 | `CC-N7` | `Workspace.Delete` 支持目录删除语义。 |
 | R-308 | `CC-N8` | `Workspace.Snapshot` 显式阻断 symlink traversal。 |
-| R-309 | `CC-N9` | SQS primary queue retention 从 1 天调整到 14 天。 |
-| R-310 | `CC-N10` | S3 lifecycle rules（转 IA/过期策略）。 |
-| R-311 | `CC-N11` | S3 access logging。 |
 | R-312 | `CC-N12` | Lambda VPC 化与 VPC endpoints。 |
 | R-313 | `CC-N15` | pricing table 外置配置化。 |
 | R-314 | `CC-N16` | Chunker 错误历史/计数增强（非仅 last error）。 |
