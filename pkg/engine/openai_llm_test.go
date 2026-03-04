@@ -443,6 +443,45 @@ func TestNewLLMClientFromEnvOpenAIMissingKey(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndValidateBaseURLDefault(t *testing.T) {
+	got, err := normalizeAndValidateBaseURL("")
+	if err != nil {
+		t.Fatalf("expected default base url to be valid, got err: %v", err)
+	}
+	if got != defaultOpenAIBaseURL {
+		t.Fatalf("expected default base url %q, got %q", defaultOpenAIBaseURL, got)
+	}
+}
+
+func TestNormalizeAndValidateBaseURLRejectsRemoteHTTP(t *testing.T) {
+	_, err := normalizeAndValidateBaseURL("http://api.openai.com/v1")
+	if err == nil {
+		t.Fatal("expected remote http base url to be rejected")
+	}
+}
+
+func TestNormalizeAndValidateBaseURLAllowsLoopbackHTTP(t *testing.T) {
+	for _, raw := range []string{
+		"http://localhost:8080/v1/",
+		"http://127.0.0.1:8080/v1/",
+	} {
+		got, err := normalizeAndValidateBaseURL(raw)
+		if err != nil {
+			t.Fatalf("expected loopback url %q to be accepted, got %v", raw, err)
+		}
+		if strings.HasSuffix(got, "/") {
+			t.Fatalf("expected trailing slash trimmed, got %q", got)
+		}
+	}
+}
+
+func TestNormalizeAndValidateBaseURLRejectsNonLoopbackIPLiteral(t *testing.T) {
+	_, err := normalizeAndValidateBaseURL("https://169.254.169.254/v1")
+	if err == nil {
+		t.Fatal("expected non-loopback ip literal to be rejected")
+	}
+}
+
 func TestResolveOpenAIAPIKeyPrefersEnv(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-env")
 	t.Setenv("OPENAI_API_KEY_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123:secret:test")

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -47,9 +49,9 @@ func NewOpenAICompatibleClient(cfg OpenAICompatibleClientConfig) (*OpenAICompati
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, fmt.Errorf("engine: openai client: api key is required")
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = defaultOpenAIBaseURL
+	baseURL, err := normalizeAndValidateBaseURL(cfg.BaseURL)
+	if err != nil {
+		return nil, err
 	}
 	modelID := strings.TrimSpace(cfg.DefaultModel)
 	if modelID == "" {
@@ -80,6 +82,53 @@ func NewOpenAICompatibleClient(cfg OpenAICompatibleClientConfig) (*OpenAICompati
 		httpClient:   httpClient,
 		streamClient: streamClient,
 	}, nil
+}
+
+func normalizeAndValidateBaseURL(raw string) (string, error) {
+	baseURL := strings.TrimSpace(raw)
+	if baseURL == "" {
+		baseURL = defaultOpenAIBaseURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("engine: openai client: invalid OPENAI_BASE_URL: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("engine: openai client: invalid OPENAI_BASE_URL: missing scheme or host")
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	hostname := strings.TrimSpace(parsed.Hostname())
+	if hostname == "" {
+		return "", fmt.Errorf("engine: openai client: invalid OPENAI_BASE_URL: empty host")
+	}
+
+	allowLocalHTTP := isLoopbackHost(hostname)
+	switch scheme {
+	case "https":
+	case "http":
+		if !allowLocalHTTP {
+			return "", fmt.Errorf("engine: openai client: OPENAI_BASE_URL must use https unless host is localhost/loopback")
+		}
+	default:
+		return "", fmt.Errorf("engine: openai client: OPENAI_BASE_URL scheme %q is not allowed", parsed.Scheme)
+	}
+
+	if ip := net.ParseIP(hostname); ip != nil && !ip.IsLoopback() {
+		return "", fmt.Errorf("engine: openai client: OPENAI_BASE_URL IP literals are only allowed for loopback addresses")
+	}
+
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func (c *OpenAICompatibleClient) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error) {
