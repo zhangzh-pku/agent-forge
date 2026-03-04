@@ -273,14 +273,61 @@ func (m *LocalManager) Snapshot(_ context.Context) (io.ReadCloser, error) {
 
 // Restore extracts a tar.gz into the workspace, with path traversal protection.
 func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
-	// Clear workspace first.
-	if err := os.RemoveAll(m.cfg.Root); err != nil {
-		return fmt.Errorf("workspace: clear for restore: %w", err)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tmpRoot, err := os.MkdirTemp(filepath.Dir(m.cfg.Root), ".agentforge-restore-*")
+	if err != nil {
+		return fmt.Errorf("workspace: create restore temp root: %w", err)
 	}
-	if err := os.MkdirAll(m.cfg.Root, 0o700); err != nil {
-		return fmt.Errorf("workspace: recreate root: %w", err)
+	if err := os.Chmod(tmpRoot, 0o700); err != nil {
+		_ = os.RemoveAll(tmpRoot)
+		return fmt.Errorf("workspace: chmod restore temp root: %w", err)
+	}
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.RemoveAll(tmpRoot)
+		}
+	}()
+
+	if err := m.extractTarGzIntoRoot(r, tmpRoot); err != nil {
+		return err
 	}
 
+	backupRoot := m.cfg.Root + ".restore-backup"
+	_ = os.RemoveAll(backupRoot)
+
+	hadRoot := true
+	if _, err := os.Stat(m.cfg.Root); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			hadRoot = false
+		} else {
+			return fmt.Errorf("workspace: stat root: %w", err)
+		}
+	}
+	if hadRoot {
+		if err := os.Rename(m.cfg.Root, backupRoot); err != nil {
+			return fmt.Errorf("workspace: stage previous root: %w", err)
+		}
+	}
+	if err := os.Rename(tmpRoot, m.cfg.Root); err != nil {
+		if hadRoot {
+			if rollbackErr := os.Rename(backupRoot, m.cfg.Root); rollbackErr != nil {
+				return fmt.Errorf("workspace: activate restore: %w (rollback failed: %v)", err, rollbackErr)
+			}
+		}
+		return fmt.Errorf("workspace: activate restore: %w", err)
+	}
+	cleanupTemp = false
+	if hadRoot {
+		_ = os.RemoveAll(backupRoot)
+	}
+
+	return m.recount()
+}
+
+func (m *LocalManager) extractTarGzIntoRoot(r io.Reader, root string) error {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("workspace: gzip reader: %w", err)
@@ -310,8 +357,8 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 				return fmt.Errorf("%w: %s", ErrPathTraversal, header.Name)
 			}
 		}
-		target := filepath.Join(m.cfg.Root, cleanName)
-		if !strings.HasPrefix(target, m.cfg.Root+string(os.PathSeparator)) && target != m.cfg.Root {
+		target := filepath.Join(root, cleanName)
+		if !strings.HasPrefix(target, root+string(os.PathSeparator)) && target != root {
 			return fmt.Errorf("%w: resolved %s", ErrPathTraversal, target)
 		}
 
@@ -363,10 +410,7 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 			continue
 		}
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.recount()
+	return nil
 }
 
 func (m *LocalManager) Cleanup() error {

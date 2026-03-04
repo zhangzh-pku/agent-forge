@@ -208,6 +208,29 @@ func TestRestorePathTraversal(t *testing.T) {
 	}
 }
 
+func TestRestoreFailureKeepsExistingWorkspace(t *testing.T) {
+	m := newTestWorkspace(t)
+	ctx := context.Background()
+
+	if err := m.Write(ctx, "keep.txt", []byte("safe")); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := createMaliciousTarGz(t)
+	err := m.Restore(ctx, buf)
+	if err == nil {
+		t.Fatal("expected restore error for malicious archive")
+	}
+
+	got, err := m.Read(ctx, "keep.txt")
+	if err != nil {
+		t.Fatalf("expected existing file to survive failed restore, got err: %v", err)
+	}
+	if string(got) != "safe" {
+		t.Fatalf("expected existing content preserved, got %q", string(got))
+	}
+}
+
 func createMaliciousTarGz(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
