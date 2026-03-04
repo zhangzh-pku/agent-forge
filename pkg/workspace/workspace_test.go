@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestWorkspace(t *testing.T) *LocalManager {
@@ -45,6 +46,42 @@ func TestWriteReadDelete(t *testing.T) {
 	_, err = m.Read(ctx, "hello.txt")
 	if err == nil {
 		t.Fatal("expected error reading deleted file")
+	}
+}
+
+func TestDeleteDirectoryTree(t *testing.T) {
+	m := newTestWorkspace(t)
+	ctx := context.Background()
+
+	if err := m.Write(ctx, "nested/a.txt", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Write(ctx, "nested/deeper/b.txt", []byte("bb")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Delete(ctx, "nested"); err != nil {
+		t.Fatalf("delete dir should succeed: %v", err)
+	}
+
+	if _, err := m.Read(ctx, "nested/a.txt"); err == nil {
+		t.Fatal("expected deleted file to be unreadable")
+	}
+	totalBytes, fileCount := m.Usage()
+	if totalBytes != 0 || fileCount != 0 {
+		t.Fatalf("expected empty usage after directory delete, got %d/%d", totalBytes, fileCount)
+	}
+}
+
+func TestDeleteRejectsRoot(t *testing.T) {
+	m := newTestWorkspace(t)
+	ctx := context.Background()
+
+	if err := m.Write(ctx, "keep.txt", []byte("safe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete(ctx, "."); err == nil {
+		t.Fatal("expected deleting workspace root to fail")
 	}
 }
 
@@ -195,6 +232,96 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 	if totalBytes != int64(len("alpha")+len("beta")) {
 		t.Fatalf("expected %d bytes, got %d", len("alpha")+len("beta"), totalBytes)
+	}
+}
+
+func TestSnapshotSkipsSymlinkEntries(t *testing.T) {
+	m := newTestWorkspace(t)
+	ctx := context.Background()
+
+	if err := m.Write(ctx, "safe.txt", []byte("safe")); err != nil {
+		t.Fatal(err)
+	}
+
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(m.Root(), "link.txt")); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	rc, err := m.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, rc); err != nil {
+		t.Fatal(err)
+	}
+
+	gr, err := gzip.NewReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gr.Close() }()
+	tr := tar.NewReader(gr)
+
+	entries := map[string]struct{}{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[h.Name] = struct{}{}
+	}
+
+	if _, ok := entries["safe.txt"]; !ok {
+		t.Fatal("expected regular file in snapshot")
+	}
+	if _, ok := entries["link.txt"]; ok {
+		t.Fatal("symlink entry should be excluded from snapshot")
+	}
+}
+
+func TestSnapshotStreamingDoesNotBlockWrites(t *testing.T) {
+	cfg := Config{Root: t.TempDir(), MaxTotalBytes: 16 * 1024 * 1024, MaxFileCount: 100}
+	m, err := NewLocalManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Cleanup() })
+	ctx := context.Background()
+
+	large := bytes.Repeat([]byte("x"), 4*1024*1024)
+	if err := m.Write(ctx, "large.bin", large); err != nil {
+		t.Fatal(err)
+	}
+
+	rc, err := m.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- m.Write(ctx, "after.txt", []byte("ok"))
+	}()
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("concurrent write failed: %v", err)
+		}
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("concurrent write blocked by snapshot streaming")
 	}
 }
 

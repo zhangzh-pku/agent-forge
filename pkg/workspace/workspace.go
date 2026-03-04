@@ -39,7 +39,7 @@ type Manager interface {
 	List(ctx context.Context, dir string) ([]FileInfo, error)
 	// Stat returns metadata for a file.
 	Stat(ctx context.Context, path string) (*FileInfo, error)
-	// Delete removes a file.
+	// Delete removes a file or directory subtree under the workspace root.
 	Delete(ctx context.Context, path string) error
 	// Snapshot creates a tar.gz archive of the entire workspace.
 	Snapshot(ctx context.Context) (io.ReadCloser, error)

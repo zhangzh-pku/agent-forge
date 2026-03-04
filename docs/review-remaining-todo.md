@@ -30,9 +30,6 @@
 |---|---|---|
 | R-302 | `CC-N2` | Prompt injection 基础防护（长度限制/可选 deny-list）。 |
 | R-303 | `CC-N3` | EventStore 增加 tenant 维度隔离策略。 |
-| R-305 | `CC-N5` | `Workspace.Snapshot` 降低持锁时间。 |
-| R-307 | `CC-N7` | `Workspace.Delete` 支持目录删除语义。 |
-| R-308 | `CC-N8` | `Workspace.Snapshot` 显式阻断 symlink traversal。 |
 | R-312 | `CC-N12` | Lambda VPC 化与 VPC endpoints。 |
 | R-313 | `CC-N15` | pricing table 外置配置化。 |
 | R-314 | `CC-N16` | Chunker 错误历史/计数增强（非仅 last error）。 |

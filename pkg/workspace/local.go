@@ -28,6 +28,11 @@ type LocalManager struct {
 	fileCount  int
 }
 
+type snapshotEntry struct {
+	absPath string
+	relPath string
+}
+
 // NewLocalManager creates a workspace rooted at cfg.Root.
 func NewLocalManager(cfg Config) (*LocalManager, error) {
 	absRoot, err := filepath.Abs(cfg.Root)
@@ -211,69 +216,131 @@ func (m *LocalManager) Delete(_ context.Context, path string) error {
 	if err != nil {
 		return fmt.Errorf("workspace: delete: %w", err)
 	}
+	if info.IsDir() {
+		// Never allow removing the workspace root through Delete.
+		if abs == m.cfg.Root {
+			return fmt.Errorf("workspace: delete: refusing to remove root")
+		}
+		if err := os.RemoveAll(abs); err != nil {
+			return fmt.Errorf("workspace: delete: %w", err)
+		}
+		return m.recount()
+	}
 	if err := os.Remove(abs); err != nil {
 		return fmt.Errorf("workspace: delete: %w", err)
 	}
-	if !info.IsDir() {
-		m.totalBytes -= info.Size()
-		m.fileCount--
-	}
+	m.totalBytes -= info.Size()
+	m.fileCount--
 	return nil
 }
 
 // Snapshot creates a tar.gz of the workspace.
 func (m *LocalManager) Snapshot(_ context.Context) (io.ReadCloser, error) {
-	m.mu.RLock()
+	entries, err := m.snapshotEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	pr, pw := io.Pipe()
 	go func() {
-		defer m.mu.RUnlock()
 		gw := gzip.NewWriter(pw)
 		tw := tar.NewWriter(gw)
-		err := filepath.Walk(m.cfg.Root, func(path string, info os.FileInfo, err error) error {
+		var walkErr error
+		for _, entry := range entries {
+			info, err := os.Lstat(entry.absPath)
 			if err != nil {
-				return err
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				walkErr = err
+				break
 			}
-			rel, err := filepath.Rel(m.cfg.Root, path)
-			if err != nil {
-				return err
+			// Explicitly skip symlinks to avoid snapshot exfiltration via traversal.
+			if info.Mode()&os.ModeSymlink != 0 {
+				continue
 			}
-			if rel == "." {
-				return nil
+			if !(info.IsDir() || info.Mode().IsRegular()) {
+				continue
 			}
+
 			header, err := tar.FileInfoHeader(info, "")
 			if err != nil {
-				return err
+				walkErr = err
+				break
 			}
-			header.Name = rel
+			header.Name = entry.relPath
 			if err := tw.WriteHeader(header); err != nil {
-				return err
+				walkErr = err
+				break
 			}
 			if info.IsDir() {
-				return nil
+				continue
 			}
-			f, err := os.Open(path) // #nosec G304 -- path is emitted by filepath.Walk under m.cfg.Root.
+
+			f, err := os.Open(entry.absPath) // #nosec G304 -- path is validated under workspace root.
 			if err != nil {
-				return err
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				walkErr = err
+				break
 			}
 			_, err = io.Copy(tw, f)
 			closeErr := f.Close()
 			if err != nil {
-				return err
+				walkErr = err
+				break
 			}
 			if closeErr != nil {
-				return closeErr
+				walkErr = closeErr
+				break
 			}
-			return nil
-		})
-		if closeErr := tw.Close(); err == nil && closeErr != nil {
-			err = closeErr
 		}
-		if closeErr := gw.Close(); err == nil && closeErr != nil {
-			err = closeErr
+
+		pipeErr := walkErr
+		if closeErr := tw.Close(); pipeErr == nil && closeErr != nil {
+			pipeErr = closeErr
 		}
-		pw.CloseWithError(err)
+		if closeErr := gw.Close(); pipeErr == nil && closeErr != nil {
+			pipeErr = closeErr
+		}
+		pw.CloseWithError(pipeErr)
 	}()
 	return pr, nil
+}
+
+func (m *LocalManager) snapshotEntries() ([]snapshotEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries := make([]snapshotEntry, 0, 64)
+	err := filepath.Walk(m.cfg.Root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(m.cfg.Root, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !(info.IsDir() || info.Mode().IsRegular()) {
+			return nil
+		}
+		entries = append(entries, snapshotEntry{
+			absPath: path,
+			relPath: rel,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 // Restore extracts a tar.gz into the workspace, with path traversal protection.
