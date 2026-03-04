@@ -1,0 +1,623 @@
+openapi: 3.0.3
+info:
+  title: AgentForge HTTP API
+  version: 0.1.0
+  description: |
+    AgentForge task lifecycle API.
+
+    Auth headers (local/header mode):
+    - X-Tenant-Id
+    - X-User-Id
+
+    Production deployments typically use trusted identity headers injected by upstream authorizers.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /health/ready:
+    get:
+      summary: Readiness probe (state + queue)
+      responses:
+        '200':
+          description: Dependencies are reachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: One or more dependencies are unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+  /v1/tasks:
+    post:
+      summary: Create task
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '201':
+          description: Task created and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTaskResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}:
+    get:
+      summary: Get task
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+      responses:
+        '200':
+          description: Task found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}/abort:
+    post:
+      summary: Request task abort
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AbortTaskRequest'
+      responses:
+        '200':
+          description: Abort flag set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}/resume:
+    post:
+      summary: Resume task from checkpoint
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeTaskRequest'
+      responses:
+        '200':
+          description: New run created and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeTaskResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}/runs/{run_id}:
+    get:
+      summary: Get run metadata
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+        - $ref: '#/components/parameters/RunIDPath'
+      responses:
+        '200':
+          description: Run found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}/runs/{run_id}/steps:
+    get:
+      summary: List run steps
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+        - $ref: '#/components/parameters/RunIDPath'
+        - in: query
+          name: from
+          schema:
+            type: integer
+            minimum: 0
+          required: false
+          description: Step start index (default 0).
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          required: false
+          description: Page size (default 200).
+      responses:
+        '200':
+          description: Step page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListStepsResponse'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task or run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}/runs/{run_id}/events/replay:
+    get:
+      summary: Replay historical stream events
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+        - $ref: '#/components/parameters/RunIDPath'
+        - in: query
+          name: from_seq
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: from_ts
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Replay payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayEventsResponse'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task or run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/tasks/{task_id}/runs/{run_id}/events/compact:
+    post:
+      summary: Compact historical stream events
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/UserHeader'
+        - $ref: '#/components/parameters/RequestIDHeader'
+        - $ref: '#/components/parameters/TaskIDPath'
+        - $ref: '#/components/parameters/RunIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompactEventsRequest'
+      responses:
+        '200':
+          description: Compaction result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompactEventsResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid identity headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task or run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  parameters:
+    TenantHeader:
+      in: header
+      name: X-Tenant-Id
+      required: true
+      schema:
+        type: string
+    UserHeader:
+      in: header
+      name: X-User-Id
+      required: true
+      schema:
+        type: string
+    RequestIDHeader:
+      in: header
+      name: X-Request-Id
+      required: false
+      schema:
+        type: string
+    TaskIDPath:
+      in: path
+      name: task_id
+      required: true
+      schema:
+        type: string
+    RunIDPath:
+      in: path
+      name: run_id
+      required: true
+      schema:
+        type: string
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        request_id:
+          type: string
+      required:
+        - error
+    CreateTaskRequest:
+      type: object
+      properties:
+        prompt:
+          type: string
+        idempotency_key:
+          type: string
+        model_config:
+          $ref: '#/components/schemas/ModelConfig'
+      required:
+        - prompt
+    CreateTaskResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+        run_id:
+          type: string
+      required:
+        - task_id
+        - run_id
+    AbortTaskRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    ResumeTaskRequest:
+      type: object
+      properties:
+        from_run_id:
+          type: string
+        from_step_index:
+          type: integer
+        model_config_override:
+          $ref: '#/components/schemas/ModelConfig'
+      required:
+        - from_run_id
+    ResumeTaskResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+        run_id:
+          type: string
+      required:
+        - task_id
+        - run_id
+    ModelConfig:
+      type: object
+      properties:
+        model_id:
+          type: string
+        temperature:
+          type: number
+          format: float
+        max_tokens:
+          type: integer
+        policy_mode:
+          type: string
+        cost_cap_usd:
+          type: number
+          format: float
+        fallback_model_ids:
+          type: array
+          items:
+            type: string
+    Task:
+      type: object
+      properties:
+        task_id:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        status:
+          type: string
+        active_run_id:
+          type: string
+        abort_requested:
+          type: boolean
+        abort_reason:
+          type: string
+        prompt:
+          type: string
+        model_config:
+          $ref: '#/components/schemas/ModelConfig'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Run:
+      type: object
+      properties:
+        run_id:
+          type: string
+        task_id:
+          type: string
+        tenant_id:
+          type: string
+        status:
+          type: string
+        last_step_index:
+          type: integer
+        model_id:
+          type: string
+        total_tokens:
+          type: integer
+        total_cost_usd:
+          type: number
+          format: float
+    Step:
+      type: object
+      properties:
+        run_id:
+          type: string
+        step_index:
+          type: integer
+        type:
+          type: string
+        status:
+          type: string
+        input:
+          type: string
+        output:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        latency_ms:
+          type: integer
+    StreamEvent:
+      type: object
+      properties:
+        seq:
+          type: integer
+        type:
+          type: string
+        ts:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+        errors:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - status
+        - checks
+    ListStepsResponse:
+      type: object
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+      required:
+        - steps
+    ReplayEventsResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/StreamEvent'
+      required:
+        - events
+    CompactEventsRequest:
+      type: object
+      properties:
+        before_ts:
+          type: integer
+      required:
+        - before_ts
+    CompactEventsResponse:
+      type: object
+      properties:
+        deleted:
+          type: integer
+      required:
+        - deleted
