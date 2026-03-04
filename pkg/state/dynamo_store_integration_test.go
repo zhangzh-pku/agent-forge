@@ -56,12 +56,73 @@ func TestDynamoStoreIntegration_BasicLifecycleAndAtomicUsage(t *testing.T) {
 		t.Fatalf("put run: %v", err)
 	}
 
+	// Additional rows to verify tenant/status listing uses indexed query semantics.
+	otherTenantTask := &model.Task{
+		TaskID:      "task_it_other_tenant",
+		TenantID:    "tnt_other",
+		UserID:      "user_it",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_it_other_tenant",
+		Prompt:      "other tenant",
+		CreatedAt:   time.Now().UTC().Add(time.Second),
+		UpdatedAt:   time.Now().UTC().Add(time.Second),
+	}
+	if err := store.PutTask(ctx, otherTenantTask); err != nil {
+		t.Fatalf("put other-tenant task: %v", err)
+	}
+	if err := store.PutRun(ctx, &model.Run{
+		TaskID:   otherTenantTask.TaskID,
+		RunID:    "run_it_other_tenant",
+		TenantID: otherTenantTask.TenantID,
+		Status:   model.RunStatusQueued,
+	}); err != nil {
+		t.Fatalf("put other-tenant run: %v", err)
+	}
+
+	sameTenantFailedTask := &model.Task{
+		TaskID:      "task_it_failed",
+		TenantID:    task.TenantID,
+		UserID:      "user_it",
+		Status:      model.TaskStatusFailed,
+		ActiveRunID: "run_it_failed",
+		Prompt:      "failed task",
+		CreatedAt:   time.Now().UTC().Add(2 * time.Second),
+		UpdatedAt:   time.Now().UTC().Add(2 * time.Second),
+	}
+	if err := store.PutTask(ctx, sameTenantFailedTask); err != nil {
+		t.Fatalf("put same-tenant failed task: %v", err)
+	}
+	if err := store.PutRun(ctx, &model.Run{
+		TaskID:   sameTenantFailedTask.TaskID,
+		RunID:    "run_it_failed",
+		TenantID: sameTenantFailedTask.TenantID,
+		Status:   model.RunStatusFailed,
+	}); err != nil {
+		t.Fatalf("put same-tenant failed run: %v", err)
+	}
+
 	gotTask, err := store.GetTask(ctx, task.TaskID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
 	if gotTask.TaskID != task.TaskID || gotTask.TenantID != task.TenantID {
 		t.Fatalf("unexpected task payload: %+v", gotTask)
+	}
+
+	queuedTasks, err := store.ListTasks(ctx, task.TenantID, []model.TaskStatus{model.TaskStatusQueued}, 10)
+	if err != nil {
+		t.Fatalf("list queued tasks for tenant: %v", err)
+	}
+	if len(queuedTasks) != 1 || queuedTasks[0].TaskID != task.TaskID {
+		t.Fatalf("unexpected tenant queued task list: %+v", queuedTasks)
+	}
+
+	queuedRuns, err := store.ListRuns(ctx, task.TenantID, []model.RunStatus{model.RunStatusQueued}, 10)
+	if err != nil {
+		t.Fatalf("list queued runs for tenant: %v", err)
+	}
+	if len(queuedRuns) != 1 || queuedRuns[0].RunID != run.RunID {
+		t.Fatalf("unexpected tenant queued run list: %+v", queuedRuns)
 	}
 
 	conn := &model.Connection{
@@ -150,9 +211,11 @@ func createIntegrationStateTables(t *testing.T, ctx context.Context, client *dyn
 		StepsTable:       prefix + "-steps",
 		ConnectionsTable: prefix + "-connections",
 		ConnectionIndex:  "task-index",
+		TaskTenantIndex:  defaultTaskTenantIndex,
+		RunTenantIndex:   defaultRunTenantIndex,
 	}
-	createKVTable(t, ctx, client, cfg.TasksTable)
-	createKVTable(t, ctx, client, cfg.RunsTable)
+	createKVTableWithTenantIndex(t, ctx, client, cfg.TasksTable, cfg.TaskTenantIndex)
+	createKVTableWithTenantIndex(t, ctx, client, cfg.RunsTable, cfg.RunTenantIndex)
 	createKVTable(t, ctx, client, cfg.StepsTable)
 	createConnectionsTableWithTaskIndex(t, ctx, client, cfg.ConnectionsTable, cfg.ConnectionIndex)
 	return cfg
@@ -174,6 +237,41 @@ func createKVTable(t *testing.T, ctx context.Context, client *dynamodb.Client, t
 	})
 	if err != nil {
 		t.Fatalf("create table %s: %v", tableName, err)
+	}
+	waiter := dynamodb.NewTableExistsWaiter(client)
+	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}, 2*time.Minute); err != nil {
+		t.Fatalf("wait for table %s: %v", tableName, err)
+	}
+}
+
+func createKVTableWithTenantIndex(t *testing.T, ctx context.Context, client *dynamodb.Client, tableName, indexName string) {
+	t.Helper()
+	_, err := client.CreateTable(ctx, &dynamodb.CreateTableInput{
+		TableName: aws.String(tableName),
+		AttributeDefinitions: []dbtypes.AttributeDefinition{
+			{AttributeName: aws.String("pk"), AttributeType: dbtypes.ScalarAttributeTypeS},
+			{AttributeName: aws.String("sk"), AttributeType: dbtypes.ScalarAttributeTypeS},
+			{AttributeName: aws.String("gsi1pk"), AttributeType: dbtypes.ScalarAttributeTypeS},
+			{AttributeName: aws.String("gsi1sk"), AttributeType: dbtypes.ScalarAttributeTypeS},
+		},
+		KeySchema: []dbtypes.KeySchemaElement{
+			{AttributeName: aws.String("pk"), KeyType: dbtypes.KeyTypeHash},
+			{AttributeName: aws.String("sk"), KeyType: dbtypes.KeyTypeRange},
+		},
+		GlobalSecondaryIndexes: []dbtypes.GlobalSecondaryIndex{
+			{
+				IndexName: aws.String(indexName),
+				KeySchema: []dbtypes.KeySchemaElement{
+					{AttributeName: aws.String("gsi1pk"), KeyType: dbtypes.KeyTypeHash},
+					{AttributeName: aws.String("gsi1sk"), KeyType: dbtypes.KeyTypeRange},
+				},
+				Projection: &dbtypes.Projection{ProjectionType: dbtypes.ProjectionTypeAll},
+			},
+		},
+		BillingMode: dbtypes.BillingModePayPerRequest,
+	})
+	if err != nil {
+		t.Fatalf("create table %s with tenant index: %v", tableName, err)
 	}
 	waiter := dynamodb.NewTableExistsWaiter(client)
 	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}, 2*time.Minute); err != nil {

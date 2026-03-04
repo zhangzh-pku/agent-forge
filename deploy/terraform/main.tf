@@ -114,6 +114,24 @@ resource "aws_dynamodb_table" "tasks" {
     type = "S"
   }
 
+  # GSI keys for tenant-scoped task listing without full table scans.
+  attribute {
+    name = "gsi1pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "gsi1sk"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "tenant-created-index"
+    hash_key        = "gsi1pk"
+    range_key       = "gsi1sk"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = true
   }
@@ -144,6 +162,24 @@ resource "aws_dynamodb_table" "runs" {
   attribute {
     name = "sk"
     type = "S"
+  }
+
+  # GSI keys for tenant-scoped run listing without full table scans.
+  attribute {
+    name = "gsi1pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "gsi1sk"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "tenant-run-index"
+    hash_key        = "gsi1pk"
+    range_key       = "gsi1sk"
+    projection_type = "ALL"
   }
 
   point_in_time_recovery {
