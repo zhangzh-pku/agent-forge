@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"encoding/base64"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	artstore "github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/workspace"
 )
 
@@ -108,5 +111,70 @@ func TestFSReadMaxBytesFromEnv(t *testing.T) {
 	t.Setenv("AGENTFORGE_FS_READ_MAX_BYTES", "-1")
 	if got := fsReadMaxBytesFromEnv(); got != defaultFSReadMaxBytes {
 		t.Fatalf("expected default limit for invalid env, got %d", got)
+	}
+}
+
+func TestFSExportToolCanceledContextReturnsPromptly(t *testing.T) {
+	ws := newFSTestWorkspace(t)
+	ctx := context.Background()
+	if err := ws.Write(ctx, "a.txt", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Write(ctx, "b.txt", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &fsExportTool{
+		ws:           ws,
+		artifacts:    artstore.NewMemoryStore(),
+		exportPrefix: "exports/test",
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	res, err := tool.Execute(canceledCtx, `{"paths":["a.txt","b.txt"]}`)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Error == "" || !strings.Contains(strings.ToLower(res.Error), "cancel") {
+		t.Fatalf("expected cancellation error, got %q", res.Error)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("expected prompt cancellation, elapsed=%s", elapsed)
+	}
+}
+
+func TestFSExportToolNoGoroutineLeakAcrossRepeatedCalls(t *testing.T) {
+	ws := newFSTestWorkspace(t)
+	ctx := context.Background()
+	if err := ws.Write(ctx, "c.txt", []byte("content")); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &fsExportTool{
+		ws:           ws,
+		artifacts:    artstore.NewMemoryStore(),
+		exportPrefix: "exports/test",
+	}
+
+	before := runtime.NumGoroutine()
+	for i := 0; i < 40; i++ {
+		res, err := tool.Execute(ctx, `{"paths":["c.txt"]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Error != "" {
+			t.Fatalf("unexpected export error on iteration %d: %s", i, res.Error)
+		}
+	}
+
+	runtime.GC()
+	time.Sleep(50 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	if after > before+6 {
+		t.Fatalf("possible goroutine leak: before=%d after=%d", before, after)
 	}
 }

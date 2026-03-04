@@ -19,7 +19,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-104 | `CC-E4` | `fs.export` goroutine 生命周期治理（`ctx.Done`/`errgroup`）。 |
 | R-113 | `CC-D12` | `ListTasks/ListRuns` 从 Scan 迁移到基于 GSI 的 Query。 |
 | R-123 | `CC-O2`, `CC-N13` | 接入 OTel/X-Ray 追踪（应用与 Terraform）。 |
 | R-132 | `SEC-SHOULD-04`, `CC-N17` | IAM 权限最小化收敛（含审计流程），减少广泛 `Scan`/过宽 S3 动作。 |
@@ -30,7 +29,6 @@
 |---|---|---|
 | R-201 | `CC-T1` | DynamoStore 测试从“基础集成”补齐到完整 CRUD/条件写/事务语义覆盖。 |
 | R-203 | `CC-T3`, `REL-N1` | SQS 集成/契约测试补齐（重复投递、DLQ、删除失败、续租失败等）。 |
-| R-206 | `CC-T7` | 新增 `fs.export` goroutine 泄漏回归测试。 |
 | R-212 | `CC-C5` | 建立并发布首个 semver 基线 tag（如 `v0.1.0`）。 |
 | R-219 | `CC-C17` | `internal/` 迁移（`pkg/config`, `pkg/util`, `pkg/ops`）。 |
 | R-221 | `CC-C19` | 清理历史中误提交的构建产物（`bin/`）。 |
