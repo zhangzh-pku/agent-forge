@@ -28,7 +28,6 @@
 | ID | Source | TODO |
 |---|---|---|
 | R-201 | `CC-T1` | DynamoStore 测试从“基础集成”补齐到完整 CRUD/条件写/事务语义覆盖。 |
-| R-203 | `CC-T3`, `REL-N1` | SQS 集成/契约测试补齐（重复投递、DLQ、删除失败、续租失败等）。 |
 | R-212 | `CC-C5` | 建立并发布首个 semver 基线 tag（如 `v0.1.0`）。 |
 | R-219 | `CC-C17` | `internal/` 迁移（`pkg/config`, `pkg/util`, `pkg/ops`）。 |
 | R-221 | `CC-C19` | 清理历史中误提交的构建产物（`bin/`）。 |
