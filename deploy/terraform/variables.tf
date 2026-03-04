@@ -37,6 +37,12 @@ variable "waf_enabled" {
   default     = true
 }
 
+variable "dashboard_enabled" {
+  description = "Enable a CloudWatch dashboard with core runtime metrics."
+  type        = bool
+  default     = true
+}
+
 variable "http_jwt_authorizer_enabled" {
   description = "Enable JWT authorizer for HTTP API routes."
   type        = bool

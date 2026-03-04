@@ -927,6 +927,85 @@ resource "aws_cloudwatch_metric_alarm" "http_api_5xx" {
   }
 }
 
+resource "aws_cloudwatch_dashboard" "agentforge" {
+  count = var.dashboard_enabled ? 1 : 0
+
+  dashboard_name = "agentforge-${var.environment}"
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Lambda Errors (5m sum)"
+          region = data.aws_region.current.name
+          stat   = "Sum"
+          period = 300
+          metrics = [
+            ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.worker.function_name],
+            ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.task_api.function_name],
+            ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.recovery.function_name],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Queue Backlog"
+          region = data.aws_region.current.name
+          stat   = "Maximum"
+          period = 300
+          metrics = [
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.tasks.name],
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.tasks_dlq.name],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "HTTP API 5xx and Count"
+          region = data.aws_region.current.name
+          stat   = "Sum"
+          period = 300
+          metrics = [
+            ["AWS/ApiGateway", "5xx", "ApiId", aws_apigatewayv2_api.http.id, "Stage", aws_apigatewayv2_stage.http.name],
+            ["AWS/ApiGateway", "Count", "ApiId", aws_apigatewayv2_api.http.id, "Stage", aws_apigatewayv2_stage.http.name],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Worker Concurrency and Throttles"
+          region = data.aws_region.current.name
+          stat   = "Maximum"
+          period = 300
+          metrics = [
+            ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", aws_lambda_function.worker.function_name],
+            ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.worker.function_name, {"stat" : "Sum"}],
+          ]
+        }
+      },
+    ]
+  })
+}
+
 # WAF for HTTP API (regional)
 resource "aws_wafv2_web_acl" "http_api" {
   count = var.waf_enabled ? 1 : 0
