@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentforge/agentforge/pkg/api"
+	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 )
 
 func TestWritePrometheusMetrics(t *testing.T) {
@@ -19,7 +20,7 @@ func TestWritePrometheusMetrics(t *testing.T) {
 		Status2xx:      2,
 		Status4xx:      1,
 		Errors5xxTotal: 0,
-	})
+	}, runtimemetrics.Snapshot{})
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
@@ -36,6 +37,12 @@ func TestWritePrometheusMetrics(t *testing.T) {
 		"agentforge_http_responses_total{code_class=\"2xx\"} 2",
 		"agentforge_http_responses_total{code_class=\"4xx\"} 1",
 		"agentforge_http_5xx_total 0",
+		"agentforge_claim_conflicts_total 0",
+		"agentforge_worker_finalize_failures_total 0",
+		"agentforge_stream_push_errors_total 0",
+		"agentforge_recovery_runs_total 0",
+		"agentforge_recovery_requeued_total 0",
+		"agentforge_recovery_errors_total 0",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected metrics output to contain %q, got:\n%s", want, body)

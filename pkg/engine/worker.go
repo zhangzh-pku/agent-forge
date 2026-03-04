@@ -9,6 +9,7 @@ import (
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/queue"
+	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/util"
@@ -61,6 +62,9 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	// Step 1: Claim the run (idempotent).
 	if err := w.store.ClaimRun(ctx, msg.TaskID, msg.RunID); err != nil {
 		if errors.Is(err, state.ErrConflict) || errors.Is(err, state.ErrNotFound) {
+			if errors.Is(err, state.ErrConflict) {
+				runtimemetrics.IncClaimConflicts()
+			}
 			log.Info("worker: claim failed (duplicate delivery or not found), skipping", map[string]interface{}{"error": err.Error()})
 			return nil // Ack — don't reprocess.
 		}
@@ -161,6 +165,7 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 
 	// Step 6: Finalize.
 	if finalizeErr := w.finalizeRun(msg.TaskID, msg.RunID, result.Status); finalizeErr != nil {
+		runtimemetrics.IncFinalizeFailures()
 		log.Error("worker: failed to persist terminal state", map[string]interface{}{
 			"error":  finalizeErr.Error(),
 			"status": string(result.Status),

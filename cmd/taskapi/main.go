@@ -21,6 +21,7 @@ import (
 	"github.com/agentforge/agentforge/pkg/engine"
 	"github.com/agentforge/agentforge/pkg/ops"
 	"github.com/agentforge/agentforge/pkg/queue"
+	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/task"
@@ -76,7 +77,8 @@ func main() {
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		snap := api.SnapshotRequestMetrics()
-		writePrometheusMetrics(w, snap)
+		runtimeSnap := runtimemetrics.SnapshotCounters()
+		writePrometheusMetrics(w, snap, runtimeSnap)
 	})
 
 	srv := &http.Server{
@@ -186,7 +188,7 @@ func writeJSON(w http.ResponseWriter, code int, data interface{}) {
 	}
 }
 
-func writePrometheusMetrics(w http.ResponseWriter, snap api.RequestMetricsSnapshot) {
+func writePrometheusMetrics(w http.ResponseWriter, snap api.RequestMetricsSnapshot, runtimeSnap runtimemetrics.Snapshot) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
@@ -217,6 +219,30 @@ func writePrometheusMetrics(w http.ResponseWriter, snap api.RequestMetricsSnapsh
 	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_5xx_total Total HTTP 5xx responses.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_5xx_total counter\n")
 	_, _ = fmt.Fprintf(w, "agentforge_http_5xx_total %d\n", snap.Errors5xxTotal)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_claim_conflicts_total Total run claim conflicts in worker.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_claim_conflicts_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_claim_conflicts_total %d\n", runtimeSnap.ClaimConflicts)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_worker_finalize_failures_total Total worker finalize failures.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_worker_finalize_failures_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_worker_finalize_failures_total %d\n", runtimeSnap.FinalizeFailures)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_stream_push_errors_total Total stream push errors.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_stream_push_errors_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_stream_push_errors_total %d\n", runtimeSnap.StreamPushErrors)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_recovery_runs_total Total stale-run recovery executions.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_recovery_runs_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_recovery_runs_total %d\n", runtimeSnap.RecoveryRuns)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_recovery_requeued_total Total runs requeued by recovery.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_recovery_requeued_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_recovery_requeued_total %d\n", runtimeSnap.RecoveryRequeued)
+
+	_, _ = fmt.Fprintf(w, "# HELP agentforge_recovery_errors_total Total recovery processing errors.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE agentforge_recovery_errors_total counter\n")
+	_, _ = fmt.Fprintf(w, "agentforge_recovery_errors_total %d\n", runtimeSnap.RecoveryErrors)
 }
 
 func buildReadinessResponse(ctx context.Context, store any, q any) (int, map[string]interface{}) {

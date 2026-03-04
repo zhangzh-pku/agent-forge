@@ -14,6 +14,7 @@ import (
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/memory"
 	"github.com/agentforge/agentforge/pkg/model"
+	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/util"
@@ -683,6 +684,7 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 
 			if pushErr != nil {
 				e.metrics.StreamPushError()
+				runtimemetrics.IncStreamPushErrors()
 			}
 			if !alive {
 				staleConnections <- c.ConnectionID

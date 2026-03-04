@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/queue"
+	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/task"
 )
@@ -33,6 +34,7 @@ func NewRecoverer(store state.Store, q queue.Queue) *Recoverer {
 
 // RecoverStaleRuns finds stale RUNNING/RUN_QUEUED runs and requeues them.
 func (r *Recoverer) RecoverStaleRuns(ctx context.Context, tenantID string, staleFor time.Duration, limit int) (*RecoveryReport, error) {
+	runtimemetrics.IncRecoveryRuns()
 	if staleFor <= 0 {
 		staleFor = 10 * time.Minute
 	}
@@ -46,6 +48,7 @@ func (r *Recoverer) RecoverStaleRuns(ctx context.Context, tenantID string, stale
 		model.RunStatusQueued,
 	}, limit)
 	if err != nil {
+		runtimemetrics.AddRecoveryErrors(1)
 		return nil, fmt.Errorf("ops: list runs: %w", err)
 	}
 
@@ -59,6 +62,7 @@ func (r *Recoverer) RecoverStaleRuns(ctx context.Context, tenantID string, stale
 		taskObj, err := r.store.GetTask(ctx, run.TaskID)
 		if err != nil {
 			out.Errors = append(out.Errors, fmt.Sprintf("task lookup failed task=%s run=%s: %v", run.TaskID, run.RunID, err))
+			runtimemetrics.AddRecoveryErrors(1)
 			continue
 		}
 		if taskObj.ActiveRunID != run.RunID {
@@ -73,6 +77,7 @@ func (r *Recoverer) RecoverStaleRuns(ctx context.Context, tenantID string, stale
 
 		if err := r.store.ResetRunToQueued(ctx, run.TaskID, run.RunID); err != nil {
 			out.Errors = append(out.Errors, fmt.Sprintf("reset run failed task=%s run=%s: %v", run.TaskID, run.RunID, err))
+			runtimemetrics.AddRecoveryErrors(1)
 			continue
 		}
 		_ = r.store.UpdateTaskStatusForRun(ctx, run.TaskID, run.RunID, []model.TaskStatus{
@@ -94,9 +99,11 @@ func (r *Recoverer) RecoverStaleRuns(ctx context.Context, tenantID string, stale
 		}
 		if err := r.queue.Enqueue(ctx, msg); err != nil {
 			out.Errors = append(out.Errors, fmt.Sprintf("requeue failed task=%s run=%s: %v", run.TaskID, run.RunID, err))
+			runtimemetrics.AddRecoveryErrors(1)
 			continue
 		}
 		out.Recovered++
+		runtimemetrics.AddRecoveryRequeued(1)
 	}
 	return out, nil
 }
