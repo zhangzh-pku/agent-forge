@@ -680,6 +680,82 @@ func TestEngineTrimsMemoryWindowBeforeLLMCall(t *testing.T) {
 	}
 }
 
+func TestEngineFailsWhenTokenCapExceeded(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	h.run.ModelConfig = &model.ModelConfig{
+		ModelID:   "gpt-4o-mini",
+		MaxTokens: 10,
+	}
+	llm := &fixedUsageLLM{
+		response: &LLMResponse{
+			Content:      "short answer",
+			FinishReason: "stop",
+			ModelID:      "gpt-4o-mini",
+			TokenUsage:   &model.TokenUsage{Input: 8, Output: 7, Total: 15},
+		},
+	}
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, NewRegistry(), h.pusher)
+
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if !strings.Contains(result.ErrorMessage, "token cap exceeded") {
+		t.Fatalf("expected token cap error, got %q", result.ErrorMessage)
+	}
+
+	step, err := h.store.GetStep(context.Background(), h.run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.ErrorCode != "TOKEN_CAP_EXCEEDED" {
+		t.Fatalf("expected TOKEN_CAP_EXCEEDED, got %q", step.ErrorCode)
+	}
+}
+
+func TestEngineFailsWhenCostCapExceeded(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	h.run.ModelConfig = &model.ModelConfig{
+		ModelID:    "gpt-4o",
+		CostCapUSD: 0.0001,
+	}
+	llm := &fixedUsageLLM{
+		response: &LLMResponse{
+			Content:      "costly answer",
+			FinishReason: "stop",
+			ModelID:      "gpt-4o",
+			TokenUsage:   &model.TokenUsage{Input: 1000, Output: 1000, Total: 2000},
+		},
+	}
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, NewRegistry(), h.pusher)
+
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if !strings.Contains(result.ErrorMessage, "cost cap exceeded") {
+		t.Fatalf("expected cost cap error, got %q", result.ErrorMessage)
+	}
+
+	step, err := h.store.GetStep(context.Background(), h.run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.ErrorCode != "COST_CAP_EXCEEDED" {
+		t.Fatalf("expected COST_CAP_EXCEEDED, got %q", step.ErrorCode)
+	}
+}
+
 func TestEngineStreamPushGoneConnectionCleanup(t *testing.T) {
 	h := setupHarness(t)
 	defer h.cleanup()
@@ -1201,4 +1277,30 @@ func (l *multiToolLLM) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, err
 		TokenUsage:   &model.TokenUsage{Input: 4, Output: 2, Total: 6},
 		FinishReason: "stop",
 	}, nil
+}
+
+type fixedUsageLLM struct {
+	response *LLMResponse
+	err      error
+}
+
+func (l *fixedUsageLLM) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, error) {
+	if l.err != nil {
+		return nil, l.err
+	}
+	if l.response == nil {
+		return &LLMResponse{
+			Content:      "ok",
+			FinishReason: "stop",
+		}, nil
+	}
+	cp := *l.response
+	if l.response.TokenUsage != nil {
+		usage := *l.response.TokenUsage
+		cp.TokenUsage = &usage
+	}
+	if len(l.response.ToolCalls) > 0 {
+		cp.ToolCalls = append([]ToolCall(nil), l.response.ToolCalls...)
+	}
+	return &cp, nil
 }

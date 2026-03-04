@@ -270,6 +270,24 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		if err := e.store.AddRunUsage(ctx, task.TaskID, run.RunID, llmResp.TokenUsage, stepCost); err != nil {
 			log.Error("engine: add run usage failed", map[string]interface{}{"error": err.Error()})
 		}
+		if budget := checkBudgetExceeded(run.ModelConfig, totalTokens, totalCost); budget != nil {
+			stepErr := errors.New(budget.Message)
+			e.writeErrorStep(ctx, run.RunID, stepIdx, stepStart, budget.Code, stepErr)
+			e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventError, map[string]interface{}{
+				"error_code":     budget.Code,
+				"message":        budget.Message,
+				"total_tokens":   totalTokens,
+				"total_cost_usd": totalCost,
+			})
+			e.metrics.TaskFailed()
+			return &RunResult{
+				Status:       model.RunStatusFailed,
+				LastStep:     stepIdx,
+				ErrorMessage: budget.Message,
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
+			}, nil
+		}
 
 		assistantToolCalls := make([]model.MemoryToolCall, 0, len(llmResp.ToolCalls))
 		for idx, tc := range llmResp.ToolCalls {
@@ -724,6 +742,30 @@ func sanitizeEventText(raw string) string {
 	out = bearerTokenPattern.ReplaceAllString(out, "Bearer "+eventTextRedacted)
 	out = plainSecretPattern.ReplaceAllString(out, "$1$2"+eventTextRedacted)
 	return truncateEventText(out, maxSanitizedEventTextRunes)
+}
+
+type budgetExceeded struct {
+	Code    string
+	Message string
+}
+
+func checkBudgetExceeded(cfg *model.ModelConfig, totalTokens int, totalCostUSD float64) *budgetExceeded {
+	if cfg == nil {
+		return nil
+	}
+	if cfg.MaxTokens > 0 && totalTokens > cfg.MaxTokens {
+		return &budgetExceeded{
+			Code:    "TOKEN_CAP_EXCEEDED",
+			Message: fmt.Sprintf("token cap exceeded: total_tokens=%d cap=%d", totalTokens, cfg.MaxTokens),
+		}
+	}
+	if cfg.CostCapUSD > 0 && totalCostUSD > cfg.CostCapUSD+1e-9 {
+		return &budgetExceeded{
+			Code:    "COST_CAP_EXCEEDED",
+			Message: fmt.Sprintf("cost cap exceeded: total_cost_usd=%.6f cap_usd=%.6f", totalCostUSD, cfg.CostCapUSD),
+		}
+	}
+	return nil
 }
 
 func redactJSONSecrets(raw string) (string, bool) {
