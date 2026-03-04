@@ -1,4 +1,4 @@
-.PHONY: build build-lambda build-lambda-zip fmt fmt-check vet test test-race lint vuln ci clean
+.PHONY: build build-lambda build-lambda-zip fmt fmt-check vet test test-race lint vuln iam-audit ci clean
 
 GO ?= go
 
@@ -72,8 +72,13 @@ lint:
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+# Terraform IAM least-privilege invariants
+iam-audit:
+	./scripts/check-iam-least-privilege.sh
+
 # CI checks
 ci:
+	$(MAKE) iam-audit
 	$(MAKE) lint
 	$(MAKE) test
 	$(MAKE) test-race
