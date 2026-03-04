@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -322,7 +323,7 @@ func (c *OpenAICompatibleClient) doJSONRequest(ctx context.Context, bodyBytes []
 		if err != nil {
 			lastErr = fmt.Errorf("engine: openai client: request failed: %w", err)
 			if attempt < openAIMaxAttempts && ctx.Err() == nil {
-				sleepWithBackoff(ctx, attempt)
+				sleepWithBackoff(ctx, attempt, "")
 				continue
 			}
 			return nil, lastErr
@@ -335,7 +336,7 @@ func (c *OpenAICompatibleClient) doJSONRequest(ctx context.Context, bodyBytes []
 		if err != nil {
 			lastErr = fmt.Errorf("engine: openai client: read response: %w", err)
 			if attempt < openAIMaxAttempts && ctx.Err() == nil {
-				sleepWithBackoff(ctx, attempt)
+				sleepWithBackoff(ctx, attempt, "")
 				continue
 			}
 			return nil, lastErr
@@ -348,7 +349,7 @@ func (c *OpenAICompatibleClient) doJSONRequest(ctx context.Context, bodyBytes []
 		}
 		lastErr = parseOpenAIError(resp.StatusCode, respBody)
 		if attempt < openAIMaxAttempts && shouldRetryStatus(resp.StatusCode) && ctx.Err() == nil {
-			sleepWithBackoff(ctx, attempt)
+			sleepWithBackoff(ctx, attempt, resp.Header.Get("Retry-After"))
 			continue
 		}
 		return nil, lastErr
@@ -370,7 +371,7 @@ func (c *OpenAICompatibleClient) doStreamRequest(ctx context.Context, bodyBytes 
 		if err != nil {
 			lastErr = fmt.Errorf("engine: openai client: stream request failed: %w", err)
 			if attempt < openAIMaxAttempts && ctx.Err() == nil {
-				sleepWithBackoff(ctx, attempt)
+				sleepWithBackoff(ctx, attempt, "")
 				continue
 			}
 			return nil, lastErr
@@ -384,7 +385,7 @@ func (c *OpenAICompatibleClient) doStreamRequest(ctx context.Context, bodyBytes 
 		_ = resp.Body.Close()
 		lastErr = parseOpenAIError(resp.StatusCode, errBody)
 		if attempt < openAIMaxAttempts && shouldRetryStatus(resp.StatusCode) && ctx.Err() == nil {
-			sleepWithBackoff(ctx, attempt)
+			sleepWithBackoff(ctx, attempt, resp.Header.Get("Retry-After"))
 			continue
 		}
 		return nil, lastErr
@@ -490,7 +491,7 @@ func shouldRetryStatus(statusCode int) bool {
 		statusCode == http.StatusGatewayTimeout
 }
 
-func sleepWithBackoff(ctx context.Context, attempt int) {
+func sleepWithBackoff(ctx context.Context, attempt int, retryAfterHeader string) {
 	if attempt <= 0 {
 		return
 	}
@@ -498,12 +499,42 @@ func sleepWithBackoff(ctx context.Context, attempt int) {
 	for i := 1; i < attempt; i++ {
 		backoff *= 2
 	}
-	timer := time.NewTimer(backoff)
+
+	wait := backoff
+	if retryAfter := parseRetryAfter(retryAfterHeader, time.Now().UTC()); retryAfter > wait {
+		wait = retryAfter
+	}
+
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
 	case <-ctx.Done():
 	}
+}
+
+func parseRetryAfter(raw string, now time.Time) time.Duration {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0
+	}
+	d := when.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+	return d
 }
 
 type openAIChatRequest struct {

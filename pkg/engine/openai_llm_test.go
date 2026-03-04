@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/agentforge/agentforge/pkg/model"
 )
@@ -232,6 +233,32 @@ func TestOpenAICompatibleClientChatRetries429(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("expected 2 attempts, got %d", calls.Load())
+	}
+}
+
+func TestParseRetryAfterSeconds(t *testing.T) {
+	got := parseRetryAfter("2", time.Unix(0, 0).UTC())
+	if got != 2*time.Second {
+		t.Fatalf("expected 2s, got %s", got)
+	}
+}
+
+func TestParseRetryAfterHTTPDate(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	header := now.Add(5 * time.Second).Format(http.TimeFormat)
+	got := parseRetryAfter(header, now)
+	if got != 5*time.Second {
+		t.Fatalf("expected 5s, got %s", got)
+	}
+}
+
+func TestParseRetryAfterInvalidOrPast(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	if got := parseRetryAfter("abc", now); got != 0 {
+		t.Fatalf("expected 0 for invalid header, got %s", got)
+	}
+	if got := parseRetryAfter(now.Add(-1*time.Second).Format(http.TimeFormat), now); got != 0 {
+		t.Fatalf("expected 0 for past date, got %s", got)
 	}
 }
 

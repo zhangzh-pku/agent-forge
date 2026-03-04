@@ -339,6 +339,6 @@ func shouldFallbackOnError(err error) bool {
 			return true
 		}
 	}
-	// Default to conservative fallback to improve availability.
-	return true
+	// Default to no fallback for unknown errors to avoid masking unexpected failures.
+	return false
 }

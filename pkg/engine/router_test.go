@@ -91,3 +91,15 @@ func TestRoutedLLMFallback(t *testing.T) {
 		t.Fatalf("expected fallback provider mock, got %s", resp.Provider)
 	}
 }
+
+func TestShouldFallbackOnErrorDefaultFalseForUnknown(t *testing.T) {
+	if shouldFallbackOnError(errors.New("unexpected upstream parse failure")) {
+		t.Fatal("expected unknown errors to not trigger fallback by default")
+	}
+}
+
+func TestShouldFallbackOnErrorRetryableStillTrue(t *testing.T) {
+	if !shouldFallbackOnError(errors.New("status 503 unavailable")) {
+		t.Fatal("expected retryable errors to trigger fallback")
+	}
+}
