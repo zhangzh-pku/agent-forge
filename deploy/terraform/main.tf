@@ -383,7 +383,8 @@ data "aws_iam_policy_document" "task_api_policy" {
       "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
       "dynamodb:Query",
-      "dynamodb:Scan",
+      "dynamodb:TransactWriteItems",
+      "dynamodb:BatchWriteItem",
     ]
     resources = [
       aws_dynamodb_table.tasks.arn,
@@ -411,10 +412,8 @@ data "aws_iam_policy_document" "task_api_policy" {
     effect = "Allow"
     actions = [
       "s3:GetObject",
-      "s3:ListBucket",
     ]
     resources = [
-      aws_s3_bucket.artifacts.arn,
       "${aws_s3_bucket.artifacts.arn}/*",
     ]
   }
@@ -469,8 +468,7 @@ resource "aws_iam_role_policy_attachment" "worker_basic_execution" {
 }
 
 data "aws_iam_policy_document" "worker_policy" {
-  # Full DynamoDB access - worker reads tasks, writes runs/steps, and
-  # looks up connections for streaming.
+  # Worker reads tasks/runs and writes runs/steps while streaming updates.
   statement {
     sid    = "DynamoDBAccess"
     effect = "Allow"
@@ -480,7 +478,6 @@ data "aws_iam_policy_document" "worker_policy" {
       "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
       "dynamodb:Query",
-      "dynamodb:Scan",
     ]
     resources = [
       aws_dynamodb_table.tasks.arn,
@@ -498,6 +495,7 @@ data "aws_iam_policy_document" "worker_policy" {
     actions = [
       "sqs:ReceiveMessage",
       "sqs:DeleteMessage",
+      "sqs:ChangeMessageVisibility",
       "sqs:GetQueueAttributes",
     ]
     resources = [aws_sqs_queue.tasks.arn]
@@ -511,11 +509,8 @@ data "aws_iam_policy_document" "worker_policy" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
-      "s3:DeleteObject",
-      "s3:ListBucket",
     ]
     resources = [
-      aws_s3_bucket.artifacts.arn,
       "${aws_s3_bucket.artifacts.arn}/*",
     ]
   }
@@ -565,6 +560,73 @@ resource "aws_iam_role_policy" "worker" {
   name   = "agentforge-worker-policy"
   role   = aws_iam_role.worker_lambda.id
   policy = data.aws_iam_policy_document.worker_policy.json
+}
+
+# --- Recovery Lambda Role ---
+# Permissions are scoped to stale-run recovery and optional consistency checks.
+resource "aws_iam_role" "recovery_lambda" {
+  name               = "agentforge-recovery-lambda-${var.environment}"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+
+  tags = {
+    Name = "agentforge-recovery-lambda"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "recovery_basic_execution" {
+  role       = aws_iam_role.recovery_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+data "aws_iam_policy_document" "recovery_policy" {
+  # Recovery requires tenant/global scans plus targeted run/task updates.
+  statement {
+    sid    = "DynamoDBRecoveryAccess"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+    ]
+    resources = [
+      aws_dynamodb_table.tasks.arn,
+      "${aws_dynamodb_table.tasks.arn}/index/*",
+      aws_dynamodb_table.runs.arn,
+      "${aws_dynamodb_table.runs.arn}/index/*",
+      aws_dynamodb_table.steps.arn,
+    ]
+  }
+
+  statement {
+    sid    = "SQSRedriveSend"
+    effect = "Allow"
+    actions = [
+      "sqs:SendMessage",
+    ]
+    resources = [aws_sqs_queue.tasks.arn]
+  }
+
+  dynamic "statement" {
+    for_each = var.kms_key_arn != "" ? [1] : []
+    content {
+      sid    = "KMSQueueAndEnv"
+      effect = "Allow"
+      actions = [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey",
+        "kms:DescribeKey",
+      ]
+      resources = [var.kms_key_arn]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "recovery" {
+  name   = "agentforge-recovery-policy"
+  role   = aws_iam_role.recovery_lambda.id
+  policy = data.aws_iam_policy_document.recovery_policy.json
 }
 
 # --- WebSocket Lambda Role ---
@@ -756,7 +818,7 @@ resource "aws_lambda_function" "worker" {
 # Periodically redrives stale runs and optionally performs consistency repair.
 resource "aws_lambda_function" "recovery" {
   function_name                  = "agentforge-recovery-${var.environment}"
-  role                           = aws_iam_role.worker_lambda.arn
+  role                           = aws_iam_role.recovery_lambda.arn
   handler                        = "bootstrap"
   runtime                        = "provided.al2023"
   architectures                  = ["arm64"]
