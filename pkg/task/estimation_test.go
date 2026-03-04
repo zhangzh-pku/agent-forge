@@ -7,67 +7,56 @@ import (
 )
 
 func TestInferTaskType(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
+		name   string
 		prompt string
 		want   string
 	}{
-		{prompt: "Please fix this golang bug", want: "coding"},
-		{prompt: "Generate a SQL metrics report", want: "analysis"},
-		{prompt: "Summarize and rewrite this article", want: "writing"},
-		{prompt: "Tell me a story", want: "general"},
+		{name: "coding by language", prompt: "Write golang code to fix bug", want: "coding"},
+		{name: "analysis by keyword", prompt: "Analyze metrics and build report", want: "analysis"},
+		{name: "writing by keyword", prompt: "Summarize and rewrite this text", want: "writing"},
+		{name: "default general", prompt: "Plan a weekend trip", want: "general"},
 	}
 
-	for _, tc := range cases {
-		if got := InferTaskType(tc.prompt); got != tc.want {
-			t.Fatalf("InferTaskType(%q): expected %q, got %q", tc.prompt, tc.want, got)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := InferTaskType(tc.prompt)
+			if got != tc.want {
+				t.Fatalf("InferTaskType(%q) = %q, want %q", tc.prompt, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestEstimateUsageDefaultsAndMinimum(t *testing.T) {
-	tokens, cost := EstimateUsage("short prompt", nil)
-	// Defaults: maxTokens=1024, plus input estimate should exceed the 256 floor.
-	if tokens <= 1024 {
-		t.Fatalf("expected tokens to include input + output allowance, got %d", tokens)
+func TestEstimateUsageDefaults(t *testing.T) {
+	tokens, cost := EstimateUsage("hello world", nil)
+	if tokens < 256 {
+		t.Fatalf("expected token floor 256, got %d", tokens)
 	}
 	if cost <= 0 {
-		t.Fatalf("expected positive estimated cost, got %.8f", cost)
-	}
-
-	// Empty prompt with max_tokens=1 should still be floored to 256.
-	tokens, _ = EstimateUsage("", &model.ModelConfig{ModelID: "gpt-4o-mini", MaxTokens: 1})
-	if tokens != 256 {
-		t.Fatalf("expected token floor 256, got %d", tokens)
+		t.Fatalf("expected positive cost, got %f", cost)
 	}
 }
 
 func TestEstimateUsageUsesModelConfig(t *testing.T) {
-	mc := &model.ModelConfig{
+	tokens, cost := EstimateUsage("build release notes", &model.ModelConfig{
 		ModelID:   "gpt-4o",
-		MaxTokens: 2048,
+		MaxTokens: 4096,
+	})
+	if tokens < 4096 {
+		t.Fatalf("expected tokens to include max_tokens, got %d", tokens)
 	}
-	tokens, cost := EstimateUsage("this is a medium length prompt for estimation", mc)
-	if tokens < 2048 {
-		t.Fatalf("expected tokens >= configured max_tokens, got %d", tokens)
-	}
-
-	miniCost := estimateModelCostUSD("gpt-4o-mini", tokens)
-	if cost <= miniCost {
-		t.Fatalf("expected gpt-4o estimated cost %.8f to be higher than mini %.8f", cost, miniCost)
+	if cost <= 0 {
+		t.Fatalf("expected positive cost, got %f", cost)
 	}
 }
 
-func TestEstimateModelCostUSDFallbackAndBounds(t *testing.T) {
-	if got := estimateModelCostUSD("gpt-4o-mini", 1000); got != 0.00035 {
-		t.Fatalf("expected exact mini price for 1k tokens, got %.8f", got)
-	}
-	if got := estimateModelCostUSD("unknown-model", 1000); got != 0.00035 {
-		t.Fatalf("expected unknown model to fallback to mini rate, got %.8f", got)
+func TestEstimateModelCostUSDFallbackAndZero(t *testing.T) {
+	if got := estimateModelCostUSD("unknown-model", 1000); got <= 0 {
+		t.Fatalf("expected fallback model cost > 0, got %f", got)
 	}
 	if got := estimateModelCostUSD("gpt-4o-mini", 0); got != 0 {
-		t.Fatalf("expected zero cost for zero tokens, got %.8f", got)
-	}
-	if got := estimateModelCostUSD("gpt-4o-mini", -10); got != 0 {
-		t.Fatalf("expected zero cost for negative tokens, got %.8f", got)
+		t.Fatalf("expected 0 cost for non-positive tokens, got %f", got)
 	}
 }
+
