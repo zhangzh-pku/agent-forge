@@ -399,3 +399,73 @@ func TestNewLLMClientFromEnvOpenAIMissingKey(t *testing.T) {
 		t.Fatal("expected error for missing OPENAI_API_KEY")
 	}
 }
+
+func TestResolveOpenAIAPIKeyPrefersEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-env")
+	t.Setenv("OPENAI_API_KEY_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123:secret:test")
+
+	orig := fetchSecretString
+	defer func() { fetchSecretString = orig }()
+	fetchSecretString = func(_ context.Context, _ string) (string, error) {
+		t.Fatal("fetchSecretString should not be called when OPENAI_API_KEY is set")
+		return "", nil
+	}
+
+	key, err := resolveOpenAIAPIKey(context.Background())
+	if err != nil {
+		t.Fatalf("resolveOpenAIAPIKey error: %v", err)
+	}
+	if key != "sk-env" {
+		t.Fatalf("expected sk-env, got %q", key)
+	}
+}
+
+func TestResolveOpenAIAPIKeyFromSecretJSON(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123:secret:test")
+	t.Setenv("OPENAI_API_KEY_SECRET_FIELD", "")
+
+	orig := fetchSecretString
+	defer func() { fetchSecretString = orig }()
+	fetchSecretString = func(_ context.Context, secretID string) (string, error) {
+		if secretID == "" {
+			t.Fatal("expected non-empty secret id")
+		}
+		return `{"api_key":"sk-json"}`, nil
+	}
+
+	key, err := resolveOpenAIAPIKey(context.Background())
+	if err != nil {
+		t.Fatalf("resolveOpenAIAPIKey error: %v", err)
+	}
+	if key != "sk-json" {
+		t.Fatalf("expected sk-json, got %q", key)
+	}
+}
+
+func TestResolveOpenAIAPIKeyFromSecretJSONWithField(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123:secret:test")
+	t.Setenv("OPENAI_API_KEY_SECRET_FIELD", "openai_key")
+
+	orig := fetchSecretString
+	defer func() { fetchSecretString = orig }()
+	fetchSecretString = func(_ context.Context, _ string) (string, error) {
+		return `{"openai_key":"sk-field"}`, nil
+	}
+
+	key, err := resolveOpenAIAPIKey(context.Background())
+	if err != nil {
+		t.Fatalf("resolveOpenAIAPIKey error: %v", err)
+	}
+	if key != "sk-field" {
+		t.Fatalf("expected sk-field, got %q", key)
+	}
+}
+
+func TestExtractAPIKeyFromSecretValueMissingJSONField(t *testing.T) {
+	_, err := extractAPIKeyFromSecretValue(`{"foo":"bar"}`, "")
+	if err == nil {
+		t.Fatal("expected error when json secret has no recognizable api key fields")
+	}
+}
