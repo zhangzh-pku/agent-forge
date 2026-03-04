@@ -1284,7 +1284,7 @@ func (s *DynamoStore) PutEvent(ctx context.Context, event *model.StreamEvent) er
 	if event == nil {
 		return nil
 	}
-	if event.RunID == "" {
+	if event.TaskID == "" || event.RunID == "" {
 		return ErrConflict
 	}
 	cp := *event
@@ -1296,7 +1296,7 @@ func (s *DynamoStore) PutEvent(ctx context.Context, event *model.StreamEvent) er
 	if err != nil {
 		return fmt.Errorf("state: marshal event: %w", err)
 	}
-	item["pk"] = avString(stepPK(cp.RunID))
+	item["pk"] = avString(eventPK(cp.TaskID, cp.RunID))
 	item["sk"] = avString(eventSK(cp.Seq))
 	item["entity"] = avString("event")
 	if s.eventRetention > 0 {
@@ -1320,7 +1320,7 @@ func (s *DynamoStore) PutEvent(ctx context.Context, event *model.StreamEvent) er
 }
 
 func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fromSeq, fromTS int64, limit int) ([]*model.StreamEvent, error) {
-	if runID == "" {
+	if taskID == "" || runID == "" {
 		return nil, nil
 	}
 	if limit <= 0 {
@@ -1332,11 +1332,36 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 		start = fromSeq + 1
 	}
 
-	var out []*model.StreamEvent
 	var retentionCutoff int64
 	if s.eventRetention > 0 {
 		retentionCutoff = time.Now().Add(-s.eventRetention).Unix()
 	}
+
+	out, err := s.queryReplayEventsByPK(ctx, eventPK(taskID, runID), taskID, start, fromTS, limit, retentionCutoff)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		// Legacy compatibility: older deployments stored events under RUN#<run-id>.
+		out, err = s.queryReplayEventsByPK(ctx, stepPK(runID), taskID, start, fromTS, limit, retentionCutoff)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Seq == out[j].Seq {
+			return out[i].TS < out[j].TS
+		}
+		return out[i].Seq < out[j].Seq
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *DynamoStore) queryReplayEventsByPK(ctx context.Context, pk, taskID string, start, fromTS int64, limit int, retentionCutoff int64) ([]*model.StreamEvent, error) {
+	var out []*model.StreamEvent
 	var startKey map[string]dbtypes.AttributeValue
 	for {
 		queryLimit, ok := remainingLimitInt32(limit, len(out))
@@ -1350,7 +1375,7 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 			TableName:              aws.String(s.stepsTable),
 			KeyConditionExpression: aws.String("pk = :pk AND sk BETWEEN :start AND :end"),
 			ExpressionAttributeValues: map[string]dbtypes.AttributeValue{
-				":pk":    avString(stepPK(runID)),
+				":pk":    avString(pk),
 				":start": avString(eventSK(start)),
 				":end":   avString(eventSK(math.MaxInt64)),
 			},
@@ -1391,7 +1416,7 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 }
 
 func (s *DynamoStore) CompactEvents(ctx context.Context, taskID, runID string, beforeTS int64) (int, error) {
-	if beforeTS <= 0 || runID == "" {
+	if beforeTS <= 0 || taskID == "" || runID == "" {
 		return 0, nil
 	}
 
@@ -1399,46 +1424,65 @@ func (s *DynamoStore) CompactEvents(ctx context.Context, taskID, runID string, b
 		pk dbtypes.AttributeValue
 		sk dbtypes.AttributeValue
 	}
-	toDelete := make([]deleteKey, 0)
+	toDelete := make([]deleteKey, 0, 32)
+	seen := make(map[string]struct{})
 
-	var startKey map[string]dbtypes.AttributeValue
-	for {
-		res, err := s.client.Query(ctx, &dynamodb.QueryInput{
-			TableName:              aws.String(s.stepsTable),
-			KeyConditionExpression: aws.String("pk = :pk AND sk BETWEEN :start AND :end"),
-			ExpressionAttributeValues: map[string]dbtypes.AttributeValue{
-				":pk":    avString(stepPK(runID)),
-				":start": avString(eventSK(0)),
-				":end":   avString(eventSK(math.MaxInt64)),
-			},
-			ExclusiveStartKey: startKey,
-			ScanIndexForward:  aws.Bool(true),
-		})
-		if err != nil {
-			return 0, fmt.Errorf("state: compact events query: %w", err)
-		}
+	collect := func(pk string) error {
+		var startKey map[string]dbtypes.AttributeValue
+		for {
+			res, err := s.client.Query(ctx, &dynamodb.QueryInput{
+				TableName:              aws.String(s.stepsTable),
+				KeyConditionExpression: aws.String("pk = :pk AND sk BETWEEN :start AND :end"),
+				ExpressionAttributeValues: map[string]dbtypes.AttributeValue{
+					":pk":    avString(pk),
+					":start": avString(eventSK(0)),
+					":end":   avString(eventSK(math.MaxInt64)),
+				},
+				ExclusiveStartKey: startKey,
+				ScanIndexForward:  aws.Bool(true),
+			})
+			if err != nil {
+				return fmt.Errorf("state: compact events query: %w", err)
+			}
 
-		for _, item := range res.Items {
-			var ev model.StreamEvent
-			if err := unmarshalMap(itemTagJSON, item, &ev); err != nil {
-				continue
-			}
-			if taskID != "" && ev.TaskID != taskID {
-				continue
-			}
-			if ev.TS < beforeTS {
-				pk := item["pk"]
-				sk := item["sk"]
-				if pk != nil && sk != nil {
-					toDelete = append(toDelete, deleteKey{pk: pk, sk: sk})
+			for _, item := range res.Items {
+				var ev model.StreamEvent
+				if err := unmarshalMap(itemTagJSON, item, &ev); err != nil {
+					continue
 				}
+				if taskID != "" && ev.TaskID != taskID {
+					continue
+				}
+				if ev.TS >= beforeTS {
+					continue
+				}
+				itemPK := item["pk"]
+				itemSK := item["sk"]
+				if itemPK == nil || itemSK == nil {
+					continue
+				}
+				encoded := fmt.Sprintf("%v|%v", itemPK, itemSK)
+				if _, ok := seen[encoded]; ok {
+					continue
+				}
+				seen[encoded] = struct{}{}
+				toDelete = append(toDelete, deleteKey{pk: itemPK, sk: itemSK})
 			}
-		}
 
-		if len(res.LastEvaluatedKey) == 0 {
-			break
+			if len(res.LastEvaluatedKey) == 0 {
+				break
+			}
+			startKey = res.LastEvaluatedKey
 		}
-		startKey = res.LastEvaluatedKey
+		return nil
+	}
+
+	if err := collect(eventPK(taskID, runID)); err != nil {
+		return 0, err
+	}
+	// Legacy compatibility path for events written under RUN#<run-id>.
+	if err := collect(stepPK(runID)); err != nil {
+		return 0, err
 	}
 
 	if len(toDelete) == 0 {
@@ -1495,6 +1539,10 @@ func runSK(runID string) string {
 
 func stepPK(runID string) string {
 	return "RUN#" + runID
+}
+
+func eventPK(taskID, runID string) string {
+	return "EVT#" + taskID + "#" + runID
 }
 
 func stepSK(stepIndex int) string {

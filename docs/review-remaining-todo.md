@@ -28,7 +28,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-303 | `CC-N3` | EventStore 增加 tenant 维度隔离策略。 |
 | R-312 | `CC-N12` | Lambda VPC 化与 VPC endpoints。 |
 | R-313 | `CC-N15` | pricing table 外置配置化。 |
 | R-314 | `CC-N16` | Chunker 错误历史/计数增强（非仅 last error）。 |

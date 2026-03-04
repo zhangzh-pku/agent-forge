@@ -965,3 +965,60 @@ func TestEventReplayAndCompaction(t *testing.T) {
 		t.Fatalf("expected 2 events after compaction, got %d", len(events))
 	}
 }
+
+func TestEventStoreIsolationByTaskRunKey(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	evA := &model.StreamEvent{
+		TaskID: "task_a",
+		RunID:  "run_shared",
+		Seq:    1,
+		TS:     time.Now().Unix(),
+		Type:   model.StreamEventStepEnd,
+	}
+	evB := &model.StreamEvent{
+		TaskID: "task_b",
+		RunID:  "run_shared",
+		Seq:    1, // same seq/run as evA, different task
+		TS:     time.Now().Unix() + 1,
+		Type:   model.StreamEventStepEnd,
+	}
+	if err := s.PutEvent(ctx, evA); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutEvent(ctx, evB); err != nil {
+		t.Fatal(err)
+	}
+
+	gotA, err := s.ReplayEvents(ctx, "task_a", "run_shared", 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotA) != 1 || gotA[0].TaskID != "task_a" {
+		t.Fatalf("expected isolated event for task_a, got %+v", gotA)
+	}
+
+	gotB, err := s.ReplayEvents(ctx, "task_b", "run_shared", 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotB) != 1 || gotB[0].TaskID != "task_b" {
+		t.Fatalf("expected isolated event for task_b, got %+v", gotB)
+	}
+
+	removed, err := s.CompactEvents(ctx, "task_a", "run_shared", time.Now().Add(time.Minute).Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 removed event for task_a, got %d", removed)
+	}
+	gotB, err = s.ReplayEvents(ctx, "task_b", "run_shared", 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotB) != 1 {
+		t.Fatalf("expected task_b events unaffected by task_a compaction, got %d", len(gotB))
+	}
+}

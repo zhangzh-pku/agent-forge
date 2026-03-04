@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +18,7 @@ type MemoryStore struct {
 	runs           map[string]*model.Run           // keyed by "task_id#run_id"
 	steps          map[string]*model.Step          // keyed by "run_id#step_index"
 	connections    map[string]*model.Connection    // keyed by connection_id
-	events         map[string][]*model.StreamEvent // keyed by run_id
+	events         map[string][]*model.StreamEvent // keyed by "task_id#run_id"
 	eventRetention time.Duration
 	idempotency    map[string]string // keyed by "tenant_id#idempotency_key" → task_id
 }
@@ -43,6 +44,7 @@ func NewMemoryStore() *MemoryStore {
 func runKey(taskID, runID string) string   { return taskID + "#" + runID }
 func stepKey(runID string, idx int) string { return fmt.Sprintf("%s#%08d", runID, idx) }
 func idempKey(tenantID, key string) string { return tenantID + "#" + key }
+func eventKey(taskID, runID string) string { return taskID + "#" + runID }
 
 // cloneTask deep-copies a Task including pointer fields.
 func cloneTask(t *model.Task) *model.Task {
@@ -629,13 +631,14 @@ func (s *MemoryStore) PutEvent(_ context.Context, event *model.StreamEvent) erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if event.RunID == "" {
+	if event.TaskID == "" || event.RunID == "" {
 		return ErrConflict
 	}
 	if event.TS == 0 {
 		event.TS = time.Now().Unix()
 	}
-	runEvents := s.events[event.RunID]
+	key := eventKey(event.TaskID, event.RunID)
+	runEvents := s.events[key]
 	// Deduplicate by sequence within a run.
 	for _, existing := range runEvents {
 		if existing.Seq == event.Seq {
@@ -660,7 +663,7 @@ func (s *MemoryStore) PutEvent(_ context.Context, event *model.StreamEvent) erro
 		}
 		runEvents = filtered
 	}
-	s.events[event.RunID] = runEvents
+	s.events[key] = runEvents
 	return nil
 }
 
@@ -668,13 +671,30 @@ func (s *MemoryStore) ReplayEvents(_ context.Context, taskID, runID string, from
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	runEvents := s.events[runID]
-	if len(runEvents) == 0 {
-		return nil, nil
-	}
 	if limit <= 0 {
 		limit = 200
 	}
+
+	// Primary path: strict task+run isolation.
+	runEvents := s.events[eventKey(taskID, runID)]
+	// Backward compatibility path for any legacy in-memory data keyed by run only.
+	if len(runEvents) == 0 && taskID == "" {
+		for key, events := range s.events {
+			if strings.HasSuffix(key, "#"+runID) {
+				runEvents = append(runEvents, events...)
+			}
+		}
+		sort.Slice(runEvents, func(i, j int) bool {
+			if runEvents[i].Seq == runEvents[j].Seq {
+				return runEvents[i].TS < runEvents[j].TS
+			}
+			return runEvents[i].Seq < runEvents[j].Seq
+		})
+	}
+	if len(runEvents) == 0 {
+		return nil, nil
+	}
+
 	out := make([]*model.StreamEvent, 0, minInt(limit, len(runEvents)))
 	for _, ev := range runEvents {
 		if taskID != "" && ev.TaskID != taskID {
@@ -700,7 +720,7 @@ func (s *MemoryStore) CompactEvents(_ context.Context, taskID, runID string, bef
 	if beforeTS <= 0 {
 		return 0, nil
 	}
-	runEvents := s.events[runID]
+	runEvents := s.events[eventKey(taskID, runID)]
 	if len(runEvents) == 0 {
 		return 0, nil
 	}
@@ -717,7 +737,7 @@ func (s *MemoryStore) CompactEvents(_ context.Context, taskID, runID string, bef
 		}
 		kept = append(kept, ev)
 	}
-	s.events[runID] = kept
+	s.events[eventKey(taskID, runID)] = kept
 	return removed, nil
 }
 

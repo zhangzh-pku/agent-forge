@@ -495,6 +495,115 @@ func TestDynamoStoreIntegration_CompactEvents(t *testing.T) {
 	}, "event replay did not converge after compaction")
 }
 
+func TestDynamoStoreIntegration_EventIsolationByTaskRunKey(t *testing.T) {
+	endpoint := strings.TrimSpace(os.Getenv("AGENTFORGE_INTEGRATION_AWS_ENDPOINT"))
+	if endpoint == "" {
+		t.Skip("set AGENTFORGE_INTEGRATION_AWS_ENDPOINT to run DynamoDB integration tests")
+	}
+
+	ctx := context.Background()
+	client := integrationDynamoClient(t, endpoint)
+
+	cfg := createIntegrationStateTables(t, ctx, client, fmt.Sprintf("af-it-evt-iso-%d", time.Now().UnixNano()))
+	store, err := NewDynamoStore(client, cfg)
+	if err != nil {
+		t.Fatalf("new dynamo store: %v", err)
+	}
+
+	now := time.Now().UTC()
+	taskA := &model.Task{
+		TaskID:      "task_evt_iso_a",
+		TenantID:    "tenant_evt_iso_a",
+		UserID:      "user_evt_iso",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_evt_shared",
+		Prompt:      "event isolation A",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	taskB := &model.Task{
+		TaskID:      "task_evt_iso_b",
+		TenantID:    "tenant_evt_iso_b",
+		UserID:      "user_evt_iso",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_evt_shared",
+		Prompt:      "event isolation B",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	runA := &model.Run{
+		TaskID:   taskA.TaskID,
+		RunID:    "run_evt_shared",
+		TenantID: taskA.TenantID,
+		Status:   model.RunStatusQueued,
+	}
+	runB := &model.Run{
+		TaskID:   taskB.TaskID,
+		RunID:    "run_evt_shared",
+		TenantID: taskB.TenantID,
+		Status:   model.RunStatusQueued,
+	}
+	if err := store.ApplyCreateTransition(ctx, taskA, runA); err != nil {
+		t.Fatalf("apply create transition task A: %v", err)
+	}
+	if err := store.ApplyCreateTransition(ctx, taskB, runB); err != nil {
+		t.Fatalf("apply create transition task B: %v", err)
+	}
+
+	evA := &model.StreamEvent{
+		TaskID: taskA.TaskID,
+		RunID:  runA.RunID,
+		Seq:    1,
+		TS:     100,
+		Type:   model.StreamEventStepEnd,
+	}
+	evB := &model.StreamEvent{
+		TaskID: taskB.TaskID,
+		RunID:  runB.RunID,
+		Seq:    1, // same run+seq as A but different task
+		TS:     101,
+		Type:   model.StreamEventStepEnd,
+	}
+	if err := store.PutEvent(ctx, evA); err != nil {
+		t.Fatalf("put event A: %v", err)
+	}
+	if err := store.PutEvent(ctx, evB); err != nil {
+		t.Fatalf("put event B: %v", err)
+	}
+
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		gotA, err := store.ReplayEvents(ctx, taskA.TaskID, runA.RunID, 0, 0, 10)
+		if err != nil {
+			return false, err
+		}
+		gotB, err := store.ReplayEvents(ctx, taskB.TaskID, runB.RunID, 0, 0, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(gotA) == 1 && len(gotB) == 1 && gotA[0].TaskID == taskA.TaskID && gotB[0].TaskID == taskB.TaskID, nil
+	}, "event replay isolation by task+run did not converge")
+
+	removed, err := store.CompactEvents(ctx, taskA.TaskID, runA.RunID, 200)
+	if err != nil {
+		t.Fatalf("compact events task A: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected one removed event for task A, got %d", removed)
+	}
+
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		gotA, err := store.ReplayEvents(ctx, taskA.TaskID, runA.RunID, 0, 0, 10)
+		if err != nil {
+			return false, err
+		}
+		gotB, err := store.ReplayEvents(ctx, taskB.TaskID, runB.RunID, 0, 0, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(gotA) == 0 && len(gotB) == 1 && gotB[0].TaskID == taskB.TaskID, nil
+	}, "compaction should not affect different task sharing run_id")
+}
+
 func integrationDynamoClient(t *testing.T, endpoint string) *dynamodb.Client {
 	t.Helper()
 	cfg, err := awscfg.LoadDefaultConfig(
