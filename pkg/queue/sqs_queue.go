@@ -128,6 +128,12 @@ func (q *SQSQueue) StartConsumer(ctx context.Context, handler MessageHandler) er
 
 		out, err := q.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl: aws.String(q.queueURL),
+			// Keep both selectors for compatibility across providers.
+			// LocalStack currently populates ApproximateReceiveCount via
+			// AttributeNames, while AWS supports MessageSystemAttributeNames.
+			AttributeNames: []sqstypes.QueueAttributeName{
+				sqstypes.QueueAttributeName("ApproximateReceiveCount"),
+			},
 			MessageSystemAttributeNames: []sqstypes.MessageSystemAttributeName{
 				sqstypes.MessageSystemAttributeNameApproximateReceiveCount,
 			},
@@ -225,6 +231,11 @@ func (q *SQSQueue) processMessage(ctx context.Context, handler MessageHandler, s
 	}
 	if err != nil {
 		// Do not delete. SQS redrive policy handles retries/DLQ.
+		// Hint visibility timeout to a short retry interval so retries
+		// are not gated by queue-level defaults (for example, 30s).
+		if visErr := q.accelerateRetry(sqsMsg); visErr != nil {
+			log.Printf("queue: accelerate retry visibility failed: %v", visErr)
+		}
 		return
 	}
 	if err := q.deleteMessage(ctx, sqsMsg); err != nil {
@@ -312,6 +323,30 @@ func (q *SQSQueue) deleteMessage(ctx context.Context, msg sqstypes.Message) erro
 	})
 	if err != nil {
 		return fmt.Errorf("queue: sqs delete message: %w", err)
+	}
+	return nil
+}
+
+func (q *SQSQueue) accelerateRetry(msg sqstypes.Message) error {
+	if msg.ReceiptHandle == nil || *msg.ReceiptHandle == "" {
+		return nil
+	}
+	// Keep retry cadence bounded and independent from queue defaults.
+	retryVisibility := int32(1)
+	if q.visibilityTimeout > 0 && q.visibilityTimeout < retryVisibility {
+		retryVisibility = q.visibilityTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := q.client.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
+		QueueUrl:          aws.String(q.queueURL),
+		ReceiptHandle:     msg.ReceiptHandle,
+		VisibilityTimeout: retryVisibility,
+	})
+	if err != nil {
+		return fmt.Errorf("queue: sqs accelerate retry visibility: %w", err)
 	}
 	return nil
 }
