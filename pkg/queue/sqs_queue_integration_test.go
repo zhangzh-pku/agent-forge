@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,6 +85,99 @@ func TestSQSQueueIntegration_EnqueueConsumeAndDelete(t *testing.T) {
 		t.Fatalf("consumer error: %v", err)
 	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for consumed message")
+	}
+
+	assertQueueEventuallyEmpty(t, client, *createOut.QueueUrl)
+}
+
+func TestSQSQueueIntegration_StartConsumerBatchConcurrency(t *testing.T) {
+	endpoint := strings.TrimSpace(os.Getenv("AGENTFORGE_INTEGRATION_AWS_ENDPOINT"))
+	if endpoint == "" {
+		t.Skip("set AGENTFORGE_INTEGRATION_AWS_ENDPOINT to run SQS integration tests")
+	}
+
+	ctx := context.Background()
+	client := integrationSQSClient(t, endpoint)
+
+	queueName := "af-it-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-")) + "-" + time.Now().UTC().Format("150405")
+	createOut, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String(queueName),
+	})
+	if err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	if createOut.QueueUrl == nil || *createOut.QueueUrl == "" {
+		t.Fatal("create queue returned empty queue url")
+	}
+
+	q, err := NewSQSQueue(client, SQSQueueConfig{
+		QueueURL:          *createOut.QueueUrl,
+		WaitTimeSeconds:   1,
+		VisibilityTimeout: 10,
+		MaxMessages:       10,
+	})
+	if err != nil {
+		t.Fatalf("new sqs queue: %v", err)
+	}
+
+	const messageCount = 4
+	taskPrefix := "task_batch_" + time.Now().UTC().Format("150405")
+	for i := 0; i < messageCount; i++ {
+		if err := q.Enqueue(ctx, &model.SQSMessage{
+			TenantID:    "tnt_integration",
+			TaskID:      taskPrefix + string(rune('a'+i)),
+			RunID:       "run_it_1",
+			SubmittedAt: time.Now().Unix(),
+		}); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+
+	consumeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var inFlight atomic.Int64
+	var maxInFlight atomic.Int64
+	var processed atomic.Int64
+
+	errCh := make(chan error, 1)
+	go func() {
+		err := q.StartConsumer(consumeCtx, func(_ context.Context, _ *model.SQSMessage) error {
+			curr := inFlight.Add(1)
+			for {
+				prev := maxInFlight.Load()
+				if curr <= prev {
+					break
+				}
+				if maxInFlight.CompareAndSwap(prev, curr) {
+					break
+				}
+			}
+
+			time.Sleep(200 * time.Millisecond)
+			inFlight.Add(-1)
+
+			if processed.Add(1) >= messageCount {
+				cancel()
+			}
+			return nil
+		})
+		if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("consumer error: %v", err)
+	case <-consumeCtx.Done():
+	}
+
+	if processed.Load() != messageCount {
+		t.Fatalf("expected %d messages processed, got %d", messageCount, processed.Load())
+	}
+	if maxInFlight.Load() < 2 {
+		t.Fatalf("expected concurrent batch processing, max in-flight was %d", maxInFlight.Load())
 	}
 
 	assertQueueEventuallyEmpty(t, client, *createOut.QueueUrl)
