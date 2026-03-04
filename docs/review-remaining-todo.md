@@ -30,7 +30,6 @@
 | R-212 | `CC-C5` | 建立并发布首个 semver 基线 tag（如 `v0.1.0`）。 |
 | R-219 | `CC-C17` | `internal/` 迁移（`pkg/config`, `pkg/util`, `pkg/ops`）。 |
 | R-221 | `CC-C19` | 清理历史中误提交的构建产物（`bin/`）。 |
-| R-222 | `OSS-S3` | 补 Terraform 专项文档（建议 `docs/terraform.md`）并在 docs 索引链接。 |
 
 ## P3 - 长期增强与加固
 

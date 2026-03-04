@@ -112,6 +112,7 @@ docs/               Architecture, API, and checkpoint documentation
 
 Key docs:
 - `docs/configuration.md` - full environment variable reference
+- `docs/terraform.md` - Terraform deployment flow, security toggles, and packaging requirements
 - `docs/coding-standards.md` - coding and review conventions
 - `docs/operations-runbook.md` - incident and partial-failure handling
 - `CONTRIBUTING.md` - pull request process and required checks
