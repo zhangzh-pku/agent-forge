@@ -21,6 +21,8 @@ const (
 	defaultConnectionTaskIndex = "task-index"
 	defaultTaskTenantIndex     = "tenant-created-index"
 	defaultRunTenantIndex      = "tenant-run-index"
+	defaultTaskEntityIndex     = "entity-created-index"
+	defaultRunEntityIndex      = "entity-run-index"
 	eventTTLAttribute          = "ttl"
 	taskMetaSK                 = "META"
 	connMetaSK                 = "META"
@@ -36,6 +38,8 @@ type DynamoStoreConfig struct {
 	ConnectionIndex  string
 	TaskTenantIndex  string
 	RunTenantIndex   string
+	TaskEntityIndex  string
+	RunEntityIndex   string
 	EventRetention   time.Duration
 }
 
@@ -49,6 +53,8 @@ type DynamoStore struct {
 	connectionIndex  string
 	taskTenantIndex  string
 	runTenantIndex   string
+	taskEntityIndex  string
+	runEntityIndex   string
 	eventRetention   time.Duration
 }
 
@@ -94,6 +100,12 @@ func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStor
 	if strings.TrimSpace(cfg.RunTenantIndex) == "" {
 		cfg.RunTenantIndex = defaultRunTenantIndex
 	}
+	if strings.TrimSpace(cfg.TaskEntityIndex) == "" {
+		cfg.TaskEntityIndex = defaultTaskEntityIndex
+	}
+	if strings.TrimSpace(cfg.RunEntityIndex) == "" {
+		cfg.RunEntityIndex = defaultRunEntityIndex
+	}
 	if cfg.EventRetention < 0 {
 		return nil, fmt.Errorf("state: event retention must be >= 0")
 	}
@@ -107,6 +119,8 @@ func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStor
 		connectionIndex:  strings.TrimSpace(cfg.ConnectionIndex),
 		taskTenantIndex:  strings.TrimSpace(cfg.TaskTenantIndex),
 		runTenantIndex:   strings.TrimSpace(cfg.RunTenantIndex),
+		taskEntityIndex:  strings.TrimSpace(cfg.TaskEntityIndex),
+		runEntityIndex:   strings.TrimSpace(cfg.RunEntityIndex),
 		eventRetention:   cfg.EventRetention,
 	}, nil
 }
@@ -131,6 +145,8 @@ func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Tas
 	taskItem["entity"] = avString("task")
 	taskItem["gsi1pk"] = avString(tenantGSIKey(task.TenantID))
 	taskItem["gsi1sk"] = avString(taskTenantSortKey(task.CreatedAt, task.TaskID))
+	taskItem["gsi2pk"] = avString(taskEntityGSIKey())
+	taskItem["gsi2sk"] = avString(taskTenantSortKey(task.CreatedAt, task.TaskID))
 	applyTaskCompatFields(taskItem, task)
 
 	runItem, err := marshalMap(itemTagJSON, run)
@@ -142,6 +158,8 @@ func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Tas
 	runItem["entity"] = avString("run")
 	runItem["gsi1pk"] = avString(tenantGSIKey(run.TenantID))
 	runItem["gsi1sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
+	runItem["gsi2pk"] = avString(runEntityGSIKey())
+	runItem["gsi2sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
 	applyRunCompatFields(runItem, run)
 
 	transactItems := []dbtypes.TransactWriteItem{
@@ -204,6 +222,8 @@ func (s *DynamoStore) PutTask(ctx context.Context, task *model.Task) error {
 	item["entity"] = avString("task")
 	item["gsi1pk"] = avString(tenantGSIKey(task.TenantID))
 	item["gsi1sk"] = avString(taskTenantSortKey(task.CreatedAt, task.TaskID))
+	item["gsi2pk"] = avString(taskEntityGSIKey())
+	item["gsi2sk"] = avString(taskTenantSortKey(task.CreatedAt, task.TaskID))
 	applyTaskCompatFields(item, task)
 
 	if task.IdempotencyKey == "" {
@@ -450,6 +470,8 @@ func (s *DynamoStore) ApplyResumeTransition(ctx context.Context, taskID string, 
 	runItem["entity"] = avString("run")
 	runItem["gsi1pk"] = avString(tenantGSIKey(run.TenantID))
 	runItem["gsi1sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
+	runItem["gsi2pk"] = avString(runEntityGSIKey())
+	runItem["gsi2sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
 	applyRunCompatFields(runItem, run)
 
 	statusCond, statusNames, statusValues := buildStatusConditionTask(from)
@@ -529,47 +551,7 @@ func (s *DynamoStore) ListTasks(ctx context.Context, tenantID string, statuses [
 	if tenantID != "" {
 		return s.listTasksByTenantQuery(ctx, tenantID, statuses, limit)
 	}
-
-	filterExpr, names, values := buildTaskScanFilter(tenantID, statuses)
-
-	var out []*model.Task
-	var startKey map[string]dbtypes.AttributeValue
-	for {
-		res, err := s.client.Scan(ctx, &dynamodb.ScanInput{
-			TableName:                 aws.String(s.tasksTable),
-			ExclusiveStartKey:         startKey,
-			FilterExpression:          aws.String(filterExpr),
-			ExpressionAttributeNames:  names,
-			ExpressionAttributeValues: values,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("state: list tasks scan: %w", err)
-		}
-
-		for _, item := range res.Items {
-			var task model.Task
-			if err := unmarshalMap(itemTagJSON, item, &task); err != nil {
-				continue
-			}
-			out = append(out, &task)
-		}
-
-		if len(res.LastEvaluatedKey) == 0 {
-			break
-		}
-		startKey = res.LastEvaluatedKey
-	}
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].TaskID < out[j].TaskID
-		}
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return s.listTasksByEntityQuery(ctx, statuses, limit)
 }
 
 func (s *DynamoStore) listTasksByTenantQuery(ctx context.Context, tenantID string, statuses []model.TaskStatus, limit int) ([]*model.Task, error) {
@@ -634,6 +616,68 @@ func (s *DynamoStore) listTasksByTenantQuery(ctx context.Context, tenantID strin
 	return out, nil
 }
 
+func (s *DynamoStore) listTasksByEntityQuery(ctx context.Context, statuses []model.TaskStatus, limit int) ([]*model.Task, error) {
+	values := map[string]dbtypes.AttributeValue{
+		":entity_gsi_pk": avString(taskEntityGSIKey()),
+	}
+	names := map[string]string{"#status": "status"}
+	filterExpr := ""
+	if len(statuses) > 0 {
+		statusKeys := make([]string, 0, len(statuses))
+		for i, st := range statuses {
+			k := fmt.Sprintf(":status%d", i)
+			values[k] = avString(string(st))
+			statusKeys = append(statusKeys, k)
+		}
+		filterExpr = "#status IN (" + strings.Join(statusKeys, ",") + ")"
+	}
+
+	var out []*model.Task
+	var startKey map[string]dbtypes.AttributeValue
+	for {
+		input := &dynamodb.QueryInput{
+			TableName:                 aws.String(s.tasksTable),
+			IndexName:                 aws.String(s.taskEntityIndex),
+			KeyConditionExpression:    aws.String("gsi2pk = :entity_gsi_pk"),
+			ExpressionAttributeValues: values,
+			ExclusiveStartKey:         startKey,
+			ScanIndexForward:          aws.Bool(true),
+		}
+		if filterExpr != "" {
+			input.FilterExpression = aws.String(filterExpr)
+			input.ExpressionAttributeNames = names
+		}
+		if limit > 0 {
+			remaining, ok := remainingLimitInt32(limit, len(out))
+			if !ok {
+				break
+			}
+			input.Limit = aws.Int32(remaining)
+		}
+
+		res, err := s.client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("state: list tasks query by entity: %w", err)
+		}
+		for _, item := range res.Items {
+			var task model.Task
+			if err := unmarshalMap(itemTagJSON, item, &task); err != nil {
+				continue
+			}
+			out = append(out, &task)
+			if limit > 0 && len(out) >= limit {
+				return out, nil
+			}
+		}
+
+		if len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = res.LastEvaluatedKey
+	}
+	return out, nil
+}
+
 // --- RunStore ---
 
 func (s *DynamoStore) PutRun(ctx context.Context, run *model.Run) error {
@@ -651,6 +695,8 @@ func (s *DynamoStore) PutRun(ctx context.Context, run *model.Run) error {
 	item["entity"] = avString("run")
 	item["gsi1pk"] = avString(tenantGSIKey(run.TenantID))
 	item["gsi1sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
+	item["gsi2pk"] = avString(runEntityGSIKey())
+	item["gsi2sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
 	applyRunCompatFields(item, run)
 
 	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
@@ -860,57 +906,7 @@ func (s *DynamoStore) ListRuns(ctx context.Context, tenantID string, statuses []
 	if tenantID != "" {
 		return s.listRunsByTenantQuery(ctx, tenantID, statuses, limit)
 	}
-
-	filterExpr, names, values := buildRunScanFilter(tenantID, statuses)
-
-	var out []*model.Run
-	var startKey map[string]dbtypes.AttributeValue
-	for {
-		res, err := s.client.Scan(ctx, &dynamodb.ScanInput{
-			TableName:                 aws.String(s.runsTable),
-			ExclusiveStartKey:         startKey,
-			FilterExpression:          aws.String(filterExpr),
-			ExpressionAttributeNames:  names,
-			ExpressionAttributeValues: values,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("state: list runs scan: %w", err)
-		}
-
-		for _, item := range res.Items {
-			var run model.Run
-			if err := unmarshalMap(itemTagJSON, item, &run); err != nil {
-				continue
-			}
-			out = append(out, &run)
-		}
-
-		if len(res.LastEvaluatedKey) == 0 {
-			break
-		}
-		startKey = res.LastEvaluatedKey
-	}
-
-	sort.Slice(out, func(i, j int) bool {
-		iStart := time.Time{}
-		jStart := time.Time{}
-		if out[i].StartedAt != nil {
-			iStart = *out[i].StartedAt
-		}
-		if out[j].StartedAt != nil {
-			jStart = *out[j].StartedAt
-		}
-		if iStart.Equal(jStart) {
-			iKey := out[i].TaskID + "#" + out[i].RunID
-			jKey := out[j].TaskID + "#" + out[j].RunID
-			return iKey < jKey
-		}
-		return iStart.Before(jStart)
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return s.listRunsByEntityQuery(ctx, statuses, limit)
 }
 
 func (s *DynamoStore) listRunsByTenantQuery(ctx context.Context, tenantID string, statuses []model.RunStatus, limit int) ([]*model.Run, error) {
@@ -955,6 +951,90 @@ func (s *DynamoStore) listRunsByTenantQuery(ctx context.Context, tenantID string
 		res, err := s.client.Query(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("state: list runs query by tenant: %w", err)
+		}
+		for _, item := range res.Items {
+			var run model.Run
+			if err := unmarshalMap(itemTagJSON, item, &run); err != nil {
+				continue
+			}
+			out = append(out, &run)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		if len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = res.LastEvaluatedKey
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		iStart := time.Time{}
+		jStart := time.Time{}
+		if out[i].StartedAt != nil {
+			iStart = *out[i].StartedAt
+		}
+		if out[j].StartedAt != nil {
+			jStart = *out[j].StartedAt
+		}
+		if iStart.Equal(jStart) {
+			iKey := out[i].TaskID + "#" + out[i].RunID
+			jKey := out[j].TaskID + "#" + out[j].RunID
+			return iKey < jKey
+		}
+		return iStart.Before(jStart)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *DynamoStore) listRunsByEntityQuery(ctx context.Context, statuses []model.RunStatus, limit int) ([]*model.Run, error) {
+	values := map[string]dbtypes.AttributeValue{
+		":entity_gsi_pk": avString(runEntityGSIKey()),
+	}
+	names := map[string]string{"#status": "status"}
+	filterExpr := ""
+	if len(statuses) > 0 {
+		statusKeys := make([]string, 0, len(statuses))
+		for i, st := range statuses {
+			k := fmt.Sprintf(":status%d", i)
+			values[k] = avString(string(st))
+			statusKeys = append(statusKeys, k)
+		}
+		filterExpr = "#status IN (" + strings.Join(statusKeys, ",") + ")"
+	}
+
+	var out []*model.Run
+	var startKey map[string]dbtypes.AttributeValue
+	for {
+		input := &dynamodb.QueryInput{
+			TableName:                 aws.String(s.runsTable),
+			IndexName:                 aws.String(s.runEntityIndex),
+			KeyConditionExpression:    aws.String("gsi2pk = :entity_gsi_pk"),
+			ExpressionAttributeValues: values,
+			ExclusiveStartKey:         startKey,
+			ScanIndexForward:          aws.Bool(true),
+		}
+		if filterExpr != "" {
+			input.FilterExpression = aws.String(filterExpr)
+			input.ExpressionAttributeNames = names
+		}
+		if limit > 0 {
+			remaining, ok := remainingLimitInt32(limit, len(out))
+			if !ok {
+				break
+			}
+			input.Limit = aws.Int32(remaining)
+		}
+
+		res, err := s.client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("state: list runs query by entity: %w", err)
 		}
 		for _, item := range res.Items {
 			var run model.Run
@@ -1440,6 +1520,14 @@ func tenantGSIKey(tenantID string) string {
 	return "TENANT#" + tenantID
 }
 
+func taskEntityGSIKey() string {
+	return "TASK"
+}
+
+func runEntityGSIKey() string {
+	return "RUN"
+}
+
 func taskTenantSortKey(createdAt time.Time, taskID string) string {
 	ts := createdAt.UTC()
 	if ts.IsZero() {
@@ -1519,50 +1607,6 @@ func buildStatusConditionTask(statuses []model.TaskStatus) (string, map[string]s
 		values[key] = avString(string(status))
 	}
 	return strings.Join(parts, " OR "), map[string]string{"#status": "status"}, values
-}
-
-func buildTaskScanFilter(tenantID string, statuses []model.TaskStatus) (string, map[string]string, map[string]dbtypes.AttributeValue) {
-	parts := []string{"#entity = :entity"}
-	names := map[string]string{"#entity": "entity", "#status": "status"}
-	values := map[string]dbtypes.AttributeValue{":entity": avString("task")}
-
-	if tenantID != "" {
-		parts = append(parts, "tenant_id = :tenant_id")
-		values[":tenant_id"] = avString(tenantID)
-	}
-	if len(statuses) > 0 {
-		statusKeys := make([]string, 0, len(statuses))
-		for i, st := range statuses {
-			k := fmt.Sprintf(":status%d", i)
-			values[k] = avString(string(st))
-			statusKeys = append(statusKeys, k)
-		}
-		parts = append(parts, "#status IN ("+strings.Join(statusKeys, ",")+")")
-	}
-
-	return strings.Join(parts, " AND "), names, values
-}
-
-func buildRunScanFilter(tenantID string, statuses []model.RunStatus) (string, map[string]string, map[string]dbtypes.AttributeValue) {
-	parts := []string{"#entity = :entity"}
-	names := map[string]string{"#entity": "entity", "#status": "status"}
-	values := map[string]dbtypes.AttributeValue{":entity": avString("run")}
-
-	if tenantID != "" {
-		parts = append(parts, "tenant_id = :tenant_id")
-		values[":tenant_id"] = avString(tenantID)
-	}
-	if len(statuses) > 0 {
-		statusKeys := make([]string, 0, len(statuses))
-		for i, st := range statuses {
-			k := fmt.Sprintf(":status%d", i)
-			values[k] = avString(string(st))
-			statusKeys = append(statusKeys, k)
-		}
-		parts = append(parts, "#status IN ("+strings.Join(statusKeys, ",")+")")
-	}
-
-	return strings.Join(parts, " AND "), names, values
 }
 
 func applyTaskCompatFields(item map[string]dbtypes.AttributeValue, task *model.Task) {

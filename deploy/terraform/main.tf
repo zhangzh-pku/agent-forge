@@ -121,10 +121,28 @@ resource "aws_dynamodb_table" "tasks" {
     type = "S"
   }
 
+  # GSI keys for global task listing via Query (no table Scan).
+  attribute {
+    name = "gsi2pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "gsi2sk"
+    type = "S"
+  }
+
   global_secondary_index {
     name            = "tenant-created-index"
     hash_key        = "gsi1pk"
     range_key       = "gsi1sk"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "entity-created-index"
+    hash_key        = "gsi2pk"
+    range_key       = "gsi2sk"
     projection_type = "ALL"
   }
 
@@ -171,10 +189,28 @@ resource "aws_dynamodb_table" "runs" {
     type = "S"
   }
 
+  # GSI keys for global run listing via Query (no table Scan).
+  attribute {
+    name = "gsi2pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "gsi2sk"
+    type = "S"
+  }
+
   global_secondary_index {
     name            = "tenant-run-index"
     hash_key        = "gsi1pk"
     range_key       = "gsi1sk"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "entity-run-index"
+    hash_key        = "gsi2pk"
+    range_key       = "gsi2sk"
     projection_type = "ALL"
   }
 
@@ -587,7 +623,6 @@ data "aws_iam_policy_document" "recovery_policy" {
       "dynamodb:GetItem",
       "dynamodb:UpdateItem",
       "dynamodb:Query",
-      "dynamodb:Scan",
     ]
     resources = [
       aws_dynamodb_table.tasks.arn,

@@ -121,6 +121,13 @@ func TestDynamoStoreIntegration_BasicLifecycleAndAtomicUsage(t *testing.T) {
 		}
 		return len(queuedTasks) == 1 && queuedTasks[0].TaskID == task.TaskID, nil
 	}, "tenant queued task list did not converge")
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		allQueuedTasks, err := store.ListTasks(ctx, "", []model.TaskStatus{model.TaskStatusQueued}, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(allQueuedTasks) == 2, nil
+	}, "global queued task list did not converge")
 
 	queuedRuns, err := store.ListRuns(ctx, task.TenantID, []model.RunStatus{model.RunStatusQueued}, 10)
 	if err != nil {
@@ -133,6 +140,13 @@ func TestDynamoStoreIntegration_BasicLifecycleAndAtomicUsage(t *testing.T) {
 		}
 		return len(queuedRuns) == 1 && queuedRuns[0].RunID == run.RunID, nil
 	}, "tenant queued run list did not converge")
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		allQueuedRuns, err := store.ListRuns(ctx, "", []model.RunStatus{model.RunStatusQueued}, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(allQueuedRuns) == 2, nil
+	}, "global queued run list did not converge")
 
 	conn := &model.Connection{
 		ConnectionID: "conn_it_1",
@@ -506,9 +520,11 @@ func createIntegrationStateTables(t *testing.T, ctx context.Context, client *dyn
 		ConnectionIndex:  "task-index",
 		TaskTenantIndex:  defaultTaskTenantIndex,
 		RunTenantIndex:   defaultRunTenantIndex,
+		TaskEntityIndex:  defaultTaskEntityIndex,
+		RunEntityIndex:   defaultRunEntityIndex,
 	}
-	createKVTableWithTenantIndex(t, ctx, client, cfg.TasksTable, cfg.TaskTenantIndex)
-	createKVTableWithTenantIndex(t, ctx, client, cfg.RunsTable, cfg.RunTenantIndex)
+	createKVTableWithTenantAndEntityIndexes(t, ctx, client, cfg.TasksTable, cfg.TaskTenantIndex, cfg.TaskEntityIndex)
+	createKVTableWithTenantAndEntityIndexes(t, ctx, client, cfg.RunsTable, cfg.RunTenantIndex, cfg.RunEntityIndex)
 	createKVTable(t, ctx, client, cfg.StepsTable)
 	createConnectionsTableWithTaskIndex(t, ctx, client, cfg.ConnectionsTable, cfg.ConnectionIndex)
 	return cfg
@@ -564,7 +580,7 @@ func createKVTable(t *testing.T, ctx context.Context, client *dynamodb.Client, t
 	}
 }
 
-func createKVTableWithTenantIndex(t *testing.T, ctx context.Context, client *dynamodb.Client, tableName, indexName string) {
+func createKVTableWithTenantAndEntityIndexes(t *testing.T, ctx context.Context, client *dynamodb.Client, tableName, tenantIndexName, entityIndexName string) {
 	t.Helper()
 	_, err := client.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName: aws.String(tableName),
@@ -573,6 +589,8 @@ func createKVTableWithTenantIndex(t *testing.T, ctx context.Context, client *dyn
 			{AttributeName: aws.String("sk"), AttributeType: dbtypes.ScalarAttributeTypeS},
 			{AttributeName: aws.String("gsi1pk"), AttributeType: dbtypes.ScalarAttributeTypeS},
 			{AttributeName: aws.String("gsi1sk"), AttributeType: dbtypes.ScalarAttributeTypeS},
+			{AttributeName: aws.String("gsi2pk"), AttributeType: dbtypes.ScalarAttributeTypeS},
+			{AttributeName: aws.String("gsi2sk"), AttributeType: dbtypes.ScalarAttributeTypeS},
 		},
 		KeySchema: []dbtypes.KeySchemaElement{
 			{AttributeName: aws.String("pk"), KeyType: dbtypes.KeyTypeHash},
@@ -580,10 +598,18 @@ func createKVTableWithTenantIndex(t *testing.T, ctx context.Context, client *dyn
 		},
 		GlobalSecondaryIndexes: []dbtypes.GlobalSecondaryIndex{
 			{
-				IndexName: aws.String(indexName),
+				IndexName: aws.String(tenantIndexName),
 				KeySchema: []dbtypes.KeySchemaElement{
 					{AttributeName: aws.String("gsi1pk"), KeyType: dbtypes.KeyTypeHash},
 					{AttributeName: aws.String("gsi1sk"), KeyType: dbtypes.KeyTypeRange},
+				},
+				Projection: &dbtypes.Projection{ProjectionType: dbtypes.ProjectionTypeAll},
+			},
+			{
+				IndexName: aws.String(entityIndexName),
+				KeySchema: []dbtypes.KeySchemaElement{
+					{AttributeName: aws.String("gsi2pk"), KeyType: dbtypes.KeyTypeHash},
+					{AttributeName: aws.String("gsi2sk"), KeyType: dbtypes.KeyTypeRange},
 				},
 				Projection: &dbtypes.Projection{ProjectionType: dbtypes.ProjectionTypeAll},
 			},
@@ -591,13 +617,14 @@ func createKVTableWithTenantIndex(t *testing.T, ctx context.Context, client *dyn
 		BillingMode: dbtypes.BillingModePayPerRequest,
 	})
 	if err != nil {
-		t.Fatalf("create table %s with tenant index: %v", tableName, err)
+		t.Fatalf("create table %s with tenant/entity indexes: %v", tableName, err)
 	}
 	waiter := dynamodb.NewTableExistsWaiter(client)
 	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}, 2*time.Minute); err != nil {
 		t.Fatalf("wait for table %s: %v", tableName, err)
 	}
-	waitForDynamoIntegrationGSIActive(t, ctx, client, tableName, indexName, 2*time.Minute)
+	waitForDynamoIntegrationGSIActive(t, ctx, client, tableName, tenantIndexName, 2*time.Minute)
+	waitForDynamoIntegrationGSIActive(t, ctx, client, tableName, entityIndexName, 2*time.Minute)
 }
 
 func createConnectionsTableWithTaskIndex(t *testing.T, ctx context.Context, client *dynamodb.Client, tableName, indexName string) {
