@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -64,14 +65,16 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	var workerWg sync.WaitGroup
 
 	recoveryCfg, err := appcfg.LoadRecoveryRuntimeConfigFromEnv()
 	if err != nil {
@@ -111,7 +114,9 @@ func main() {
 			llm, registry, pusher,
 			engine.DefaultEngineConfig(),
 		)
+		workerWg.Add(1)
 		go func() {
+			defer workerWg.Done()
 			log.Println("Embedded worker started (local mode)")
 			if err := worker.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("Worker error: %v\n", err)
@@ -126,7 +131,26 @@ func main() {
 		<-sigCh
 		log.Println("shutting down...")
 		cancel()
-		_ = srv.Shutdown(context.Background())
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("http shutdown error: %v", err)
+		}
+
+		workerDone := make(chan struct{})
+		go func() {
+			workerWg.Wait()
+			close(workerDone)
+		}()
+
+		select {
+		case <-workerDone:
+		case <-shutdownCtx.Done():
+			if embeddedWorker {
+				log.Printf("worker drain timed out: %v", shutdownCtx.Err())
+			}
+		}
 	}()
 
 	if embeddedWorker {
