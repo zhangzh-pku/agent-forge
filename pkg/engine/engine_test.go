@@ -431,6 +431,56 @@ func (c *errorLLMClient) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, e
 	return nil, c.err
 }
 
+type lengthThenStopLLM struct {
+	lengthResponses   int
+	calls             int
+	sawContinuePrompt bool
+}
+
+func (l *lengthThenStopLLM) Chat(_ context.Context, req *LLMRequest) (*LLMResponse, error) {
+	l.calls++
+	if len(req.Messages) > 0 {
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role == model.MessageRoleUser && strings.Contains(last.Content, "truncated") {
+			l.sawContinuePrompt = true
+		}
+	}
+	if l.calls <= l.lengthResponses {
+		return &LLMResponse{
+			Content:      "partial answer chunk",
+			TokenUsage:   &model.TokenUsage{Input: 10, Output: 10, Total: 20},
+			FinishReason: "length",
+		}, nil
+	}
+	return &LLMResponse{
+		Content:      "final answer",
+		TokenUsage:   &model.TokenUsage{Input: 10, Output: 5, Total: 15},
+		FinishReason: "stop",
+	}, nil
+}
+
+type alwaysLengthLLM struct{}
+
+func (l *alwaysLengthLLM) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, error) {
+	return &LLMResponse{
+		Content:      "still truncated",
+		TokenUsage:   &model.TokenUsage{Input: 10, Output: 10, Total: 20},
+		FinishReason: "length",
+	}, nil
+}
+
+type recordingLLM struct {
+	inner   LLMClient
+	maxSeen int
+}
+
+func (l *recordingLLM) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error) {
+	if n := len(req.Messages); n > l.maxSeen {
+		l.maxSeen = n
+	}
+	return l.inner.Chat(ctx, req)
+}
+
 func TestEngineLLMFailure(t *testing.T) {
 	h := setupHarness(t)
 	defer h.cleanup()
@@ -528,6 +578,74 @@ func TestEngineMaxSteps(t *testing.T) {
 	}
 	if result.ErrorMessage != "max steps reached" {
 		t.Fatalf("expected 'max steps reached', got %q", result.ErrorMessage)
+	}
+}
+
+func TestEngineHandlesLengthFinishReasonWithContinuation(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	llm := &lengthThenStopLLM{lengthResponses: 1}
+	registry := NewRegistry()
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, registry, h.pusher)
+
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s (error: %s)", result.Status, result.ErrorMessage)
+	}
+	if !llm.sawContinuePrompt {
+		t.Fatal("expected continuation prompt after length finish_reason")
+	}
+}
+
+func TestEngineFailsOnRepeatedLengthFinishReason(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	cfg := DefaultEngineConfig()
+	cfg.MaxSteps = 10
+	llm := &alwaysLengthLLM{}
+	registry := NewRegistry()
+	eng := NewEngine(cfg, h.store, h.artifacts, llm, registry, h.pusher)
+
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if !strings.Contains(result.ErrorMessage, "truncated") {
+		t.Fatalf("expected truncated error message, got %q", result.ErrorMessage)
+	}
+}
+
+func TestEngineTrimsMemoryWindowBeforeLLMCall(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	rec := &recordingLLM{inner: NewMockLLMClient(40)}
+	registry := NewRegistry()
+	for _, tool := range NewFSTools(h.ws) {
+		registry.Register(tool)
+	}
+
+	cfg := DefaultEngineConfig()
+	cfg.MaxSteps = 60
+	eng := NewEngine(cfg, h.store, h.artifacts, rec, registry, h.pusher)
+
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s (error: %s)", result.Status, result.ErrorMessage)
+	}
+	if rec.maxSeen > maxEngineMemoryMessages {
+		t.Fatalf("expected llm message window <= %d, got %d", maxEngineMemoryMessages, rec.maxSeen)
 	}
 }
 

@@ -28,6 +28,9 @@ const (
 	maxSanitizedEventTextRunes = 2048
 	eventTextRedacted          = "[REDACTED]"
 	eventTextTruncatedSuffix   = "...[truncated]"
+	maxEngineMemoryMessages    = 64
+	maxConsecutiveLengthStops  = 3
+	lengthContinuePrompt       = "Your previous response was truncated due to length. Continue exactly from where you stopped, without repeating prior content."
 )
 
 var (
@@ -103,6 +106,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 	var totalCost float64
 
 	startStep := 0
+	consecutiveLengthStops := 0
 
 	// If resuming, restore from checkpoint.
 	if run.ResumeFromStepIndex != nil {
@@ -211,6 +215,7 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 		stepStart := time.Now().UTC()
 
 		// LLM call (streaming if supported).
+		mem.Messages = trimMemoryMessages(mem.Messages, maxEngineMemoryMessages)
 		llmReq := &LLMRequest{
 			Messages:    mem.Messages,
 			ModelConfig: run.ModelConfig,
@@ -415,6 +420,31 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			"latency_ms": latency,
 		})
 
+		if len(llmResp.ToolCalls) == 0 && llmResp.FinishReason == "length" {
+			consecutiveLengthStops++
+			if consecutiveLengthStops >= maxConsecutiveLengthStops {
+				errMsg := fmt.Sprintf("llm response truncated %d times consecutively", consecutiveLengthStops)
+				e.pushEvent(ctx, task.TenantID, task.TaskID, run.RunID, &eventSeq, model.StreamEventError, map[string]interface{}{
+					"error_code": "LLM_TRUNCATED",
+					"message":    errMsg,
+				})
+				e.metrics.TaskFailed()
+				return &RunResult{
+					Status:       model.RunStatusFailed,
+					LastStep:     stepIdx,
+					ErrorMessage: errMsg,
+					TotalTokens:  totalTokens,
+					TotalCostUSD: totalCost,
+				}, nil
+			}
+			mem.Messages = append(mem.Messages, model.MemoryMessage{
+				Role:    model.MessageRoleUser,
+				Content: lengthContinuePrompt,
+			})
+			continue
+		}
+		consecutiveLengthStops = 0
+
 		// Check if this is a final answer (no tool calls and finish_reason == "stop").
 		if len(llmResp.ToolCalls) == 0 && llmResp.FinishReason == "stop" {
 			// Write final step with checkpoint so it can be used for resume.
@@ -503,6 +533,30 @@ func collectToolSpecs(reg ToolRegistry) []ToolSpec {
 		return nil
 	}
 	return specs
+}
+
+func trimMemoryMessages(messages []model.MemoryMessage, limit int) []model.MemoryMessage {
+	if limit <= 0 || len(messages) <= limit {
+		return messages
+	}
+	keepHead := 0
+	if len(messages) > 0 && messages[0].Role == model.MessageRoleSystem {
+		keepHead = 1
+	}
+	tailBudget := limit - keepHead
+	if tailBudget <= 0 {
+		return messages[:keepHead]
+	}
+	start := len(messages) - tailBudget
+	if start < keepHead {
+		start = keepHead
+	}
+	trimmed := make([]model.MemoryMessage, 0, keepHead+len(messages[start:]))
+	if keepHead > 0 {
+		trimmed = append(trimmed, messages[:keepHead]...)
+	}
+	trimmed = append(trimmed, messages[start:]...)
+	return trimmed
 }
 
 func (e *Engine) writeErrorStep(ctx context.Context, runID string, stepIdx int, start time.Time, errorCode string, stepErr error) {
