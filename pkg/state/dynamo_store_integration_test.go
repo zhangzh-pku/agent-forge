@@ -113,17 +113,25 @@ func TestDynamoStoreIntegration_BasicLifecycleAndAtomicUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list queued tasks for tenant: %v", err)
 	}
-	if len(queuedTasks) != 1 || queuedTasks[0].TaskID != task.TaskID {
-		t.Fatalf("unexpected tenant queued task list: %+v", queuedTasks)
-	}
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		queuedTasks, err = store.ListTasks(ctx, task.TenantID, []model.TaskStatus{model.TaskStatusQueued}, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(queuedTasks) == 1 && queuedTasks[0].TaskID == task.TaskID, nil
+	}, "tenant queued task list did not converge")
 
 	queuedRuns, err := store.ListRuns(ctx, task.TenantID, []model.RunStatus{model.RunStatusQueued}, 10)
 	if err != nil {
 		t.Fatalf("list queued runs for tenant: %v", err)
 	}
-	if len(queuedRuns) != 1 || queuedRuns[0].RunID != run.RunID {
-		t.Fatalf("unexpected tenant queued run list: %+v", queuedRuns)
-	}
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		queuedRuns, err = store.ListRuns(ctx, task.TenantID, []model.RunStatus{model.RunStatusQueued}, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(queuedRuns) == 1 && queuedRuns[0].RunID == run.RunID, nil
+	}, "tenant queued run list did not converge")
 
 	conn := &model.Connection{
 		ConnectionID: "conn_it_1",
@@ -221,6 +229,33 @@ func createIntegrationStateTables(t *testing.T, ctx context.Context, client *dyn
 	return cfg
 }
 
+func waitForDynamoIntegrationCondition(
+	t *testing.T,
+	timeout time.Duration,
+	interval time.Duration,
+	check func() (bool, error),
+	msg string,
+) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		ok, err := check()
+		if err != nil {
+			lastErr = err
+		} else if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				t.Fatalf("%s: %v", msg, lastErr)
+			}
+			t.Fatalf("%s", msg)
+		}
+		time.Sleep(interval)
+	}
+}
+
 func createKVTable(t *testing.T, ctx context.Context, client *dynamodb.Client, tableName string) {
 	t.Helper()
 	_, err := client.CreateTable(ctx, &dynamodb.CreateTableInput{
@@ -277,6 +312,7 @@ func createKVTableWithTenantIndex(t *testing.T, ctx context.Context, client *dyn
 	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}, 2*time.Minute); err != nil {
 		t.Fatalf("wait for table %s: %v", tableName, err)
 	}
+	waitForDynamoIntegrationGSIActive(t, ctx, client, tableName, indexName, 2*time.Minute)
 }
 
 func createConnectionsTableWithTaskIndex(t *testing.T, ctx context.Context, client *dynamodb.Client, tableName, indexName string) {
@@ -311,5 +347,46 @@ func createConnectionsTableWithTaskIndex(t *testing.T, ctx context.Context, clie
 	waiter := dynamodb.NewTableExistsWaiter(client)
 	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}, 2*time.Minute); err != nil {
 		t.Fatalf("wait for table %s: %v", tableName, err)
+	}
+	waitForDynamoIntegrationGSIActive(t, ctx, client, tableName, indexName, 2*time.Minute)
+}
+
+func waitForDynamoIntegrationGSIActive(
+	t *testing.T,
+	ctx context.Context,
+	client *dynamodb.Client,
+	tableName string,
+	indexName string,
+	timeout time.Duration,
+) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		out, err := client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+			TableName: aws.String(tableName),
+		})
+		if err != nil {
+			if time.Now().After(deadline) {
+				t.Fatalf("describe table %s: %v", tableName, err)
+			}
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if out.Table == nil {
+			if time.Now().After(deadline) {
+				t.Fatalf("describe table %s returned nil table", tableName)
+			}
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		for _, gsi := range out.Table.GlobalSecondaryIndexes {
+			if aws.ToString(gsi.IndexName) == indexName && gsi.IndexStatus == dbtypes.IndexStatusActive {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gsi %s on table %s did not become ACTIVE", indexName, tableName)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

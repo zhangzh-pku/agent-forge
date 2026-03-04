@@ -121,7 +121,7 @@ func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Tas
 		return ErrConflict
 	}
 
-	taskItem, err := attributevalue.MarshalMap(task)
+	taskItem, err := marshalMap(itemTagJSON, task)
 	if err != nil {
 		return fmt.Errorf("state: marshal create task: %w", err)
 	}
@@ -130,8 +130,9 @@ func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Tas
 	taskItem["entity"] = avString("task")
 	taskItem["gsi1pk"] = avString(tenantGSIKey(task.TenantID))
 	taskItem["gsi1sk"] = avString(taskTenantSortKey(task.CreatedAt, task.TaskID))
+	applyTaskCompatFields(taskItem, task)
 
-	runItem, err := attributevalue.MarshalMap(run)
+	runItem, err := marshalMap(itemTagJSON, run)
 	if err != nil {
 		return fmt.Errorf("state: marshal create run: %w", err)
 	}
@@ -140,6 +141,7 @@ func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Tas
 	runItem["entity"] = avString("run")
 	runItem["gsi1pk"] = avString(tenantGSIKey(run.TenantID))
 	runItem["gsi1sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
+	applyRunCompatFields(runItem, run)
 
 	transactItems := []dbtypes.TransactWriteItem{
 		{Put: &dbtypes.Put{
@@ -192,7 +194,7 @@ func (s *DynamoStore) PutTask(ctx context.Context, task *model.Task) error {
 		return fmt.Errorf("state: put task: invalid task")
 	}
 
-	item, err := attributevalue.MarshalMap(task)
+	item, err := marshalMap(itemTagJSON, task)
 	if err != nil {
 		return fmt.Errorf("state: put task marshal: %w", err)
 	}
@@ -201,6 +203,7 @@ func (s *DynamoStore) PutTask(ctx context.Context, task *model.Task) error {
 	item["entity"] = avString("task")
 	item["gsi1pk"] = avString(tenantGSIKey(task.TenantID))
 	item["gsi1sk"] = avString(taskTenantSortKey(task.CreatedAt, task.TaskID))
+	applyTaskCompatFields(item, task)
 
 	if task.IdempotencyKey == "" {
 		_, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
@@ -271,7 +274,7 @@ func (s *DynamoStore) GetTask(ctx context.Context, taskID string) (*model.Task, 
 	}
 
 	var task model.Task
-	if err := attributevalue.UnmarshalMap(out.Item, &task); err != nil {
+	if err := unmarshalMap(itemTagJSON, out.Item, &task); err != nil {
 		return nil, fmt.Errorf("state: unmarshal task: %w", err)
 	}
 	return &task, nil
@@ -436,7 +439,7 @@ func (s *DynamoStore) ApplyResumeTransition(ctx context.Context, taskID string, 
 		return ErrNotFound
 	}
 
-	runItem, err := attributevalue.MarshalMap(run)
+	runItem, err := marshalMap(itemTagJSON, run)
 	if err != nil {
 		return fmt.Errorf("state: marshal resume run: %w", err)
 	}
@@ -445,6 +448,7 @@ func (s *DynamoStore) ApplyResumeTransition(ctx context.Context, taskID string, 
 	runItem["entity"] = avString("run")
 	runItem["gsi1pk"] = avString(tenantGSIKey(run.TenantID))
 	runItem["gsi1sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
+	applyRunCompatFields(runItem, run)
 
 	statusCond, statusNames, statusValues := buildStatusConditionTask(from)
 	statusNames["#status"] = "status"
@@ -542,7 +546,7 @@ func (s *DynamoStore) ListTasks(ctx context.Context, tenantID string, statuses [
 
 		for _, item := range res.Items {
 			var task model.Task
-			if err := attributevalue.UnmarshalMap(item, &task); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &task); err != nil {
 				continue
 			}
 			out = append(out, &task)
@@ -611,7 +615,7 @@ func (s *DynamoStore) listTasksByTenantQuery(ctx context.Context, tenantID strin
 		}
 		for _, item := range res.Items {
 			var task model.Task
-			if err := attributevalue.UnmarshalMap(item, &task); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &task); err != nil {
 				continue
 			}
 			out = append(out, &task)
@@ -635,7 +639,7 @@ func (s *DynamoStore) PutRun(ctx context.Context, run *model.Run) error {
 		return fmt.Errorf("state: put run: invalid run")
 	}
 
-	item, err := attributevalue.MarshalMap(run)
+	item, err := marshalMap(itemTagJSON, run)
 	if err != nil {
 		return fmt.Errorf("state: put run marshal: %w", err)
 	}
@@ -644,6 +648,7 @@ func (s *DynamoStore) PutRun(ctx context.Context, run *model.Run) error {
 	item["entity"] = avString("run")
 	item["gsi1pk"] = avString(tenantGSIKey(run.TenantID))
 	item["gsi1sk"] = avString(runTenantSortKey(run.TaskID, run.RunID))
+	applyRunCompatFields(item, run)
 
 	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.runsTable),
@@ -675,7 +680,7 @@ func (s *DynamoStore) GetRun(ctx context.Context, taskID, runID string) (*model.
 		return nil, ErrNotFound
 	}
 	var run model.Run
-	if err := attributevalue.UnmarshalMap(out.Item, &run); err != nil {
+	if err := unmarshalMap(itemTagJSON, out.Item, &run); err != nil {
 		return nil, fmt.Errorf("state: unmarshal run: %w", err)
 	}
 	return &run, nil
@@ -869,7 +874,7 @@ func (s *DynamoStore) ListRuns(ctx context.Context, tenantID string, statuses []
 
 		for _, item := range res.Items {
 			var run model.Run
-			if err := attributevalue.UnmarshalMap(item, &run); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &run); err != nil {
 				continue
 			}
 			out = append(out, &run)
@@ -948,7 +953,7 @@ func (s *DynamoStore) listRunsByTenantQuery(ctx context.Context, tenantID string
 		}
 		for _, item := range res.Items {
 			var run model.Run
-			if err := attributevalue.UnmarshalMap(item, &run); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &run); err != nil {
 				continue
 			}
 			out = append(out, &run)
@@ -994,7 +999,7 @@ func (s *DynamoStore) PutStep(ctx context.Context, step *model.Step) error {
 		return fmt.Errorf("state: put step: invalid step")
 	}
 
-	item, err := attributevalue.MarshalMap(step)
+	item, err := marshalMap(itemTagJSON, step)
 	if err != nil {
 		return fmt.Errorf("state: marshal step: %w", err)
 	}
@@ -1033,7 +1038,7 @@ func (s *DynamoStore) GetStep(ctx context.Context, runID string, stepIndex int) 
 	}
 
 	var step model.Step
-	if err := attributevalue.UnmarshalMap(out.Item, &step); err != nil {
+	if err := unmarshalMap(itemTagJSON, out.Item, &step); err != nil {
 		return nil, fmt.Errorf("state: unmarshal step: %w", err)
 	}
 	return &step, nil
@@ -1072,7 +1077,7 @@ func (s *DynamoStore) ListSteps(ctx context.Context, runID string, from, limit i
 
 		for _, item := range res.Items {
 			var step model.Step
-			if err := attributevalue.UnmarshalMap(item, &step); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &step); err != nil {
 				continue
 			}
 			out = append(out, &step)
@@ -1095,7 +1100,7 @@ func (s *DynamoStore) PutConnection(ctx context.Context, conn *model.Connection)
 	if conn == nil || conn.ConnectionID == "" {
 		return fmt.Errorf("state: put connection: invalid connection")
 	}
-	item, err := attributevalue.MarshalMap(conn)
+	item, err := marshalMap(itemTagJSON, conn)
 	if err != nil {
 		return fmt.Errorf("state: marshal connection: %w", err)
 	}
@@ -1131,7 +1136,7 @@ func (s *DynamoStore) GetConnection(ctx context.Context, connectionID string) (*
 		return nil, ErrNotFound
 	}
 	var conn model.Connection
-	if err := attributevalue.UnmarshalMap(out.Item, &conn); err != nil {
+	if err := unmarshalMap(itemTagJSON, out.Item, &conn); err != nil {
 		return nil, fmt.Errorf("state: unmarshal connection: %w", err)
 	}
 	return &conn, nil
@@ -1174,7 +1179,7 @@ func (s *DynamoStore) GetConnectionsByTask(ctx context.Context, taskID string) (
 
 		for _, item := range res.Items {
 			var conn model.Connection
-			if err := attributevalue.UnmarshalMap(item, &conn); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &conn); err != nil {
 				continue
 			}
 			out = append(out, &conn)
@@ -1202,7 +1207,7 @@ func (s *DynamoStore) PutEvent(ctx context.Context, event *model.StreamEvent) er
 		cp.TS = time.Now().Unix()
 	}
 
-	item, err := attributevalue.MarshalMap(cp)
+	item, err := marshalMap(itemTagJSON, cp)
 	if err != nil {
 		return fmt.Errorf("state: marshal event: %w", err)
 	}
@@ -1274,7 +1279,7 @@ func (s *DynamoStore) ReplayEvents(ctx context.Context, taskID, runID string, fr
 
 		for _, item := range res.Items {
 			var ev model.StreamEvent
-			if err := attributevalue.UnmarshalMap(item, &ev); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &ev); err != nil {
 				continue
 			}
 			if taskID != "" && ev.TaskID != taskID {
@@ -1330,7 +1335,7 @@ func (s *DynamoStore) CompactEvents(ctx context.Context, taskID, runID string, b
 
 		for _, item := range res.Items {
 			var ev model.StreamEvent
-			if err := attributevalue.UnmarshalMap(item, &ev); err != nil {
+			if err := unmarshalMap(itemTagJSON, item, &ev); err != nil {
 				continue
 			}
 			if taskID != "" && ev.TaskID != taskID {
@@ -1450,6 +1455,20 @@ func idempotencyPK(tenantID, idempotencyKey string) string {
 	return "IDEMP#" + tenantID + "#" + idempotencyKey
 }
 
+const itemTagJSON = "json"
+
+func marshalMap(tagKey string, in interface{}) (map[string]dbtypes.AttributeValue, error) {
+	return attributevalue.MarshalMapWithOptions(in, func(o *attributevalue.EncoderOptions) {
+		o.TagKey = tagKey
+	})
+}
+
+func unmarshalMap(tagKey string, in map[string]dbtypes.AttributeValue, out interface{}) error {
+	return attributevalue.UnmarshalMapWithOptions(in, out, func(o *attributevalue.DecoderOptions) {
+		o.TagKey = tagKey
+	})
+}
+
 func avString(v string) dbtypes.AttributeValue {
 	return &dbtypes.AttributeValueMemberS{Value: v}
 }
@@ -1539,6 +1558,67 @@ func buildRunScanFilter(tenantID string, statuses []model.RunStatus) (string, ma
 	}
 
 	return strings.Join(parts, " AND "), names, values
+}
+
+func applyTaskCompatFields(item map[string]dbtypes.AttributeValue, task *model.Task) {
+	if task == nil {
+		return
+	}
+	// Keep snake_case aliases aligned with update/query expressions.
+	item["task_id"] = avString(task.TaskID)
+	item["tenant_id"] = avString(task.TenantID)
+	item["user_id"] = avString(task.UserID)
+	item["status"] = avString(string(task.Status))
+	item["active_run_id"] = avString(task.ActiveRunID)
+	item["abort_requested"] = avBool(task.AbortRequested)
+	item["abort_reason"] = avString(task.AbortReason)
+	if task.AbortTS != nil {
+		item["abort_ts"] = avTime(*task.AbortTS)
+	}
+	item["idempotency_key"] = avString(task.IdempotencyKey)
+	item["prompt"] = avString(task.Prompt)
+	if !task.CreatedAt.IsZero() {
+		item["created_at"] = avTime(task.CreatedAt)
+	}
+	if !task.UpdatedAt.IsZero() {
+		item["updated_at"] = avTime(task.UpdatedAt)
+	}
+}
+
+func applyRunCompatFields(item map[string]dbtypes.AttributeValue, run *model.Run) {
+	if run == nil {
+		return
+	}
+	// Keep snake_case aliases aligned with update/query expressions.
+	item["task_id"] = avString(run.TaskID)
+	item["run_id"] = avString(run.RunID)
+	item["tenant_id"] = avString(run.TenantID)
+	item["status"] = avString(string(run.Status))
+	if run.ParentRunID != "" {
+		item["parent_run_id"] = avString(run.ParentRunID)
+	}
+	if run.ResumeFromStepIndex != nil {
+		item["resume_from_step_index"] = avInt(*run.ResumeFromStepIndex)
+	}
+	if run.StartedAt != nil {
+		item["started_at"] = avTime(*run.StartedAt)
+	}
+	if run.EndedAt != nil {
+		item["ended_at"] = avTime(*run.EndedAt)
+	}
+	if run.LastStepIndex != 0 {
+		item["last_step_index"] = avInt(run.LastStepIndex)
+	}
+	usage := run.TotalTokenUsage
+	if usage == nil {
+		usage = &model.TokenUsage{}
+	}
+	item["total_token_usage"] = &dbtypes.AttributeValueMemberM{Value: map[string]dbtypes.AttributeValue{
+		"input":  avInt(usage.Input),
+		"output": avInt(usage.Output),
+		"total":  avInt(usage.Total),
+	}}
+	item["total_cost_usd"] = avFloat(run.TotalCostUSD)
 }
 
 func remainingLimitInt32(limit, current int) (int32, bool) {

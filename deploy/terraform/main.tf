@@ -71,9 +71,9 @@ resource "aws_sqs_queue" "tasks_dlq" {
 # Messages that fail 3 times are redirected to the DLQ for manual inspection.
 resource "aws_sqs_queue" "tasks" {
   name                       = "agentforge-tasks-${var.environment}"
-  visibility_timeout_seconds = 900     # 15 min - must exceed Lambda timeout
-  message_retention_seconds  = 86400   # 1 day
-  receive_wait_time_seconds  = 20      # Long polling to reduce empty receives
+  visibility_timeout_seconds = 900   # 15 min - must exceed Lambda timeout
+  message_retention_seconds  = 86400 # 1 day
+  receive_wait_time_seconds  = 20    # Long polling to reduce empty receives
 
   # SSE-KMS encryption at rest
   sqs_managed_sse_enabled = var.kms_key_arn == "" ? true : false
@@ -662,13 +662,13 @@ locals {
 # --- Task API Lambda ---
 # Handles REST API requests: create task, get task status, list runs, etc.
 resource "aws_lambda_function" "task_api" {
-  function_name = "agentforge-task-api-${var.environment}"
-  role          = aws_iam_role.task_api_lambda.arn
-  handler       = "bootstrap"
-  runtime       = "provided.al2023"
-  architectures = ["arm64"]
-  timeout       = 30
-  memory_size   = 256
+  function_name                  = "agentforge-task-api-${var.environment}"
+  role                           = aws_iam_role.task_api_lambda.arn
+  handler                        = "bootstrap"
+  runtime                        = "provided.al2023"
+  architectures                  = ["arm64"]
+  timeout                        = 30
+  memory_size                    = 256
   reserved_concurrent_executions = 50
   kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
@@ -677,16 +677,16 @@ resource "aws_lambda_function" "task_api" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME = "aws"
-      ENVIRONMENT       = var.environment
-      TASKS_TABLE       = aws_dynamodb_table.tasks.name
-      RUNS_TABLE        = aws_dynamodb_table.runs.name
-      STEPS_TABLE       = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
-      TASK_QUEUE_URL    = aws_sqs_queue.tasks.url
-      ARTIFACTS_BUCKET  = aws_s3_bucket.artifacts.id
-      ARTIFACT_SSE_KMS_KEY_ARN = var.kms_key_arn
-      OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
+      AGENTFORGE_RUNTIME          = "aws"
+      ENVIRONMENT                 = var.environment
+      TASKS_TABLE                 = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                  = aws_dynamodb_table.runs.name
+      STEPS_TABLE                 = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE           = aws_dynamodb_table.connections.name
+      TASK_QUEUE_URL              = aws_sqs_queue.tasks.url
+      ARTIFACTS_BUCKET            = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN    = var.kms_key_arn
+      OPENAI_API_KEY_SECRET_ARN   = var.openai_api_key_secret_arn
       OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
     }
   }
@@ -731,17 +731,17 @@ resource "aws_lambda_function" "worker" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME = "aws"
-      ENVIRONMENT        = var.environment
-      TASKS_TABLE        = aws_dynamodb_table.tasks.name
-      RUNS_TABLE         = aws_dynamodb_table.runs.name
-      STEPS_TABLE        = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
-      TASK_QUEUE_URL     = aws_sqs_queue.tasks.url
-      ARTIFACTS_BUCKET   = aws_s3_bucket.artifacts.id
-      ARTIFACT_SSE_KMS_KEY_ARN = var.kms_key_arn
-      WEBSOCKET_ENDPOINT = aws_apigatewayv2_stage.websocket.invoke_url
-      OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
+      AGENTFORGE_RUNTIME          = "aws"
+      ENVIRONMENT                 = var.environment
+      TASKS_TABLE                 = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                  = aws_dynamodb_table.runs.name
+      STEPS_TABLE                 = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE           = aws_dynamodb_table.connections.name
+      TASK_QUEUE_URL              = aws_sqs_queue.tasks.url
+      ARTIFACTS_BUCKET            = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN    = var.kms_key_arn
+      WEBSOCKET_ENDPOINT          = aws_apigatewayv2_stage.websocket.invoke_url
+      OPENAI_API_KEY_SECRET_ARN   = var.openai_api_key_secret_arn
       OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
     }
   }
@@ -769,13 +769,13 @@ resource "aws_lambda_function" "worker" {
 # --- Recovery Lambda ---
 # Periodically redrives stale runs and optionally performs consistency repair.
 resource "aws_lambda_function" "recovery" {
-  function_name = "agentforge-recovery-${var.environment}"
-  role          = aws_iam_role.worker_lambda.arn
-  handler       = "bootstrap"
-  runtime       = "provided.al2023"
-  architectures = ["arm64"]
-  timeout       = 120
-  memory_size   = 256
+  function_name                  = "agentforge-recovery-${var.environment}"
+  role                           = aws_iam_role.worker_lambda.arn
+  handler                        = "bootstrap"
+  runtime                        = "provided.al2023"
+  architectures                  = ["arm64"]
+  timeout                        = 120
+  memory_size                    = 256
   reserved_concurrent_executions = 10
   kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
@@ -784,21 +784,21 @@ resource "aws_lambda_function" "recovery" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME                        = "aws"
-      ENVIRONMENT                               = var.environment
-      TASKS_TABLE                               = aws_dynamodb_table.tasks.name
-      RUNS_TABLE                                = aws_dynamodb_table.runs.name
-      STEPS_TABLE                               = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE                         = aws_dynamodb_table.connections.name
-      TASK_QUEUE_URL                            = aws_sqs_queue.tasks.url
-      ARTIFACTS_BUCKET                          = aws_s3_bucket.artifacts.id
-      ARTIFACT_SSE_KMS_KEY_ARN                  = var.kms_key_arn
-      AGENTFORGE_RECOVERY_ENABLED               = "false"
-      AGENTFORGE_RECOVERY_STALE_FOR             = var.recovery_stale_for
-      AGENTFORGE_RECOVERY_LIMIT                 = tostring(var.recovery_limit)
-      AGENTFORGE_RECOVERY_TENANT_ID             = var.recovery_tenant_id
-      AGENTFORGE_RECOVERY_CONSISTENCY_CHECK     = tostring(var.recovery_consistency_check)
-      AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR    = tostring(var.recovery_consistency_repair)
+      AGENTFORGE_RUNTIME                     = "aws"
+      ENVIRONMENT                            = var.environment
+      TASKS_TABLE                            = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                             = aws_dynamodb_table.runs.name
+      STEPS_TABLE                            = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE                      = aws_dynamodb_table.connections.name
+      TASK_QUEUE_URL                         = aws_sqs_queue.tasks.url
+      ARTIFACTS_BUCKET                       = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN               = var.kms_key_arn
+      AGENTFORGE_RECOVERY_ENABLED            = "false"
+      AGENTFORGE_RECOVERY_STALE_FOR          = var.recovery_stale_for
+      AGENTFORGE_RECOVERY_LIMIT              = tostring(var.recovery_limit)
+      AGENTFORGE_RECOVERY_TENANT_ID          = var.recovery_tenant_id
+      AGENTFORGE_RECOVERY_CONSISTENCY_CHECK  = tostring(var.recovery_consistency_check)
+      AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR = tostring(var.recovery_consistency_repair)
     }
   }
 
@@ -825,13 +825,13 @@ resource "aws_lambda_function" "recovery" {
 # --- WebSocket Connect Lambda ---
 # Handles $connect route: validates auth token, stores connection record.
 resource "aws_lambda_function" "ws_connect" {
-  function_name = "agentforge-ws-connect-${var.environment}"
-  role          = aws_iam_role.websocket_lambda.arn
-  handler       = "bootstrap"
-  runtime       = "provided.al2023"
-  architectures = ["arm64"]
-  timeout       = 10
-  memory_size   = 128
+  function_name                  = "agentforge-ws-connect-${var.environment}"
+  role                           = aws_iam_role.websocket_lambda.arn
+  handler                        = "bootstrap"
+  runtime                        = "provided.al2023"
+  architectures                  = ["arm64"]
+  timeout                        = 10
+  memory_size                    = 128
   reserved_concurrent_executions = 50
   kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
@@ -841,11 +841,11 @@ resource "aws_lambda_function" "ws_connect" {
   environment {
     variables = {
       AGENTFORGE_RUNTIME = "aws"
-      ENVIRONMENT       = var.environment
-      TASKS_TABLE       = aws_dynamodb_table.tasks.name
-      RUNS_TABLE        = aws_dynamodb_table.runs.name
-      STEPS_TABLE       = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
+      ENVIRONMENT        = var.environment
+      TASKS_TABLE        = aws_dynamodb_table.tasks.name
+      RUNS_TABLE         = aws_dynamodb_table.runs.name
+      STEPS_TABLE        = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
     }
   }
 
@@ -872,13 +872,13 @@ resource "aws_lambda_function" "ws_connect" {
 # --- WebSocket Disconnect Lambda ---
 # Handles $disconnect route: removes stale connection record from DynamoDB.
 resource "aws_lambda_function" "ws_disconnect" {
-  function_name = "agentforge-ws-disconnect-${var.environment}"
-  role          = aws_iam_role.websocket_lambda.arn
-  handler       = "bootstrap"
-  runtime       = "provided.al2023"
-  architectures = ["arm64"]
-  timeout       = 10
-  memory_size   = 128
+  function_name                  = "agentforge-ws-disconnect-${var.environment}"
+  role                           = aws_iam_role.websocket_lambda.arn
+  handler                        = "bootstrap"
+  runtime                        = "provided.al2023"
+  architectures                  = ["arm64"]
+  timeout                        = 10
+  memory_size                    = 128
   reserved_concurrent_executions = 50
   kms_key_arn                    = var.kms_key_arn != "" ? var.kms_key_arn : null
 
@@ -888,11 +888,11 @@ resource "aws_lambda_function" "ws_disconnect" {
   environment {
     variables = {
       AGENTFORGE_RUNTIME = "aws"
-      ENVIRONMENT       = var.environment
-      TASKS_TABLE       = aws_dynamodb_table.tasks.name
-      RUNS_TABLE        = aws_dynamodb_table.runs.name
-      STEPS_TABLE       = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
+      ENVIRONMENT        = var.environment
+      TASKS_TABLE        = aws_dynamodb_table.tasks.name
+      RUNS_TABLE         = aws_dynamodb_table.runs.name
+      STEPS_TABLE        = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
     }
   }
 
@@ -1129,7 +1129,7 @@ resource "aws_cloudwatch_dashboard" "agentforge" {
           period = 300
           metrics = [
             ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", aws_lambda_function.worker.function_name],
-            ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.worker.function_name, {"stat" : "Sum"}],
+            ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.worker.function_name, { "stat" : "Sum" }],
           ]
         }
       },
@@ -1273,14 +1273,14 @@ resource "aws_apigatewayv2_stage" "http" {
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api_gateway.arn
     format = jsonencode({
-      requestId      = "$context.requestId"
-      ip             = "$context.identity.sourceIp"
-      requestTime    = "$context.requestTime"
-      httpMethod     = "$context.httpMethod"
-      routeKey       = "$context.routeKey"
-      status         = "$context.status"
-      protocol       = "$context.protocol"
-      responseLength = "$context.responseLength"
+      requestId        = "$context.requestId"
+      ip               = "$context.identity.sourceIp"
+      requestTime      = "$context.requestTime"
+      httpMethod       = "$context.httpMethod"
+      routeKey         = "$context.routeKey"
+      status           = "$context.status"
+      protocol         = "$context.protocol"
+      responseLength   = "$context.responseLength"
       integrationError = "$context.integrationErrorMessage"
     })
   }

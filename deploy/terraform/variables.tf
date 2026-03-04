@@ -31,7 +31,7 @@ variable "openai_api_key_secret_arn" {
   default     = ""
 
   validation {
-    condition = var.openai_api_key_secret_arn == "" || can(regex("^arn:aws[a-z-]*:secretsmanager:[^:]+:[0-9]{12}:secret:.+", var.openai_api_key_secret_arn))
+    condition     = var.openai_api_key_secret_arn == "" || can(regex("^arn:aws[a-z-]*:secretsmanager:[^:]+:[0-9]{12}:secret:.+", var.openai_api_key_secret_arn))
     error_message = "openai_api_key_secret_arn must be empty or a full Secrets Manager secret ARN."
   }
 }
