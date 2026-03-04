@@ -94,14 +94,6 @@ variable "http_jwt_authorizer_enabled" {
   description = "Enable JWT authorizer for HTTP API routes."
   type        = bool
   default     = false
-
-  validation {
-    condition = !var.http_jwt_authorizer_enabled || (
-      trimspace(var.http_jwt_authorizer_issuer) != "" &&
-      length(var.http_jwt_authorizer_audiences) > 0
-    )
-    error_message = "http_jwt_authorizer_enabled=true requires http_jwt_authorizer_issuer and at least one http_jwt_authorizer_audiences value."
-  }
 }
 
 variable "http_jwt_authorizer_issuer" {
@@ -120,11 +112,6 @@ variable "websocket_authorizer_enabled" {
   description = "Enable CUSTOM (Lambda REQUEST) authorizer for WebSocket $connect route."
   type        = bool
   default     = false
-
-  validation {
-    condition     = !var.websocket_authorizer_enabled || trimspace(var.websocket_authorizer_lambda_arn) != ""
-    error_message = "websocket_authorizer_enabled=true requires websocket_authorizer_lambda_arn."
-  }
 }
 
 variable "websocket_authorizer_lambda_arn" {
@@ -184,11 +171,6 @@ variable "recovery_consistency_repair" {
   description = "Apply consistency repair (requires consistency check)."
   type        = bool
   default     = false
-
-  validation {
-    condition     = !var.recovery_consistency_repair || var.recovery_consistency_check
-    error_message = "recovery_consistency_repair=true requires recovery_consistency_check=true."
-  }
 }
 
 variable "recovery_alarm_actions" {
