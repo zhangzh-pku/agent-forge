@@ -37,6 +37,55 @@ variable "waf_enabled" {
   default     = true
 }
 
+variable "http_jwt_authorizer_enabled" {
+  description = "Enable JWT authorizer for HTTP API routes."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.http_jwt_authorizer_enabled || (
+      trimspace(var.http_jwt_authorizer_issuer) != "" &&
+      length(var.http_jwt_authorizer_audiences) > 0
+    )
+    error_message = "http_jwt_authorizer_enabled=true requires http_jwt_authorizer_issuer and at least one http_jwt_authorizer_audiences value."
+  }
+}
+
+variable "http_jwt_authorizer_issuer" {
+  description = "JWT issuer URL for HTTP API authorizer (for example Cognito issuer URL)."
+  type        = string
+  default     = ""
+}
+
+variable "http_jwt_authorizer_audiences" {
+  description = "Allowed JWT audiences for HTTP API authorizer."
+  type        = list(string)
+  default     = []
+}
+
+variable "websocket_authorizer_enabled" {
+  description = "Enable CUSTOM (Lambda REQUEST) authorizer for WebSocket $connect route."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.websocket_authorizer_enabled || trimspace(var.websocket_authorizer_lambda_arn) != ""
+    error_message = "websocket_authorizer_enabled=true requires websocket_authorizer_lambda_arn."
+  }
+}
+
+variable "websocket_authorizer_lambda_arn" {
+  description = "Lambda function ARN used by the WebSocket CUSTOM authorizer."
+  type        = string
+  default     = ""
+}
+
+variable "websocket_authorizer_identity_sources" {
+  description = "Identity sources for WebSocket CUSTOM authorizer."
+  type        = list(string)
+  default     = ["route.request.header.Authorization"]
+}
+
 variable "recovery_enabled" {
   description = "Enable EventBridge scheduled stale-run recovery Lambda."
   type        = bool

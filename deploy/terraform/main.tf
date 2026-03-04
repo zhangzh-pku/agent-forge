@@ -974,10 +974,25 @@ resource "aws_apigatewayv2_integration" "task_api" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_authorizer" "http_jwt" {
+  count = var.http_jwt_authorizer_enabled ? 1 : 0
+
+  api_id           = aws_apigatewayv2_api.http.id
+  authorizer_type  = "JWT"
+  name             = "agentforge-http-jwt-${var.environment}"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    issuer   = var.http_jwt_authorizer_issuer
+    audience = var.http_jwt_authorizer_audiences
+  }
+}
+
 resource "aws_apigatewayv2_route" "task_api_default" {
   api_id             = aws_apigatewayv2_api.http.id
   route_key          = "$default"
-  authorization_type = "AWS_IAM"
+  authorization_type = var.http_jwt_authorizer_enabled ? "JWT" : "AWS_IAM"
+  authorizer_id      = var.http_jwt_authorizer_enabled ? aws_apigatewayv2_authorizer.http_jwt[0].id : null
   target             = "integrations/${aws_apigatewayv2_integration.task_api.id}"
 }
 
@@ -1061,10 +1076,21 @@ resource "aws_apigatewayv2_integration" "ws_connect" {
   integration_method = "POST"
 }
 
+resource "aws_apigatewayv2_authorizer" "websocket_request" {
+  count = var.websocket_authorizer_enabled ? 1 : 0
+
+  api_id           = aws_apigatewayv2_api.websocket.id
+  authorizer_type  = "REQUEST"
+  name             = "agentforge-ws-request-${var.environment}"
+  authorizer_uri   = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${var.websocket_authorizer_lambda_arn}/invocations"
+  identity_sources = var.websocket_authorizer_identity_sources
+}
+
 resource "aws_apigatewayv2_route" "ws_connect" {
   api_id             = aws_apigatewayv2_api.websocket.id
   route_key          = "$connect"
-  authorization_type = "AWS_IAM"
+  authorization_type = var.websocket_authorizer_enabled ? "CUSTOM" : "AWS_IAM"
+  authorizer_id      = var.websocket_authorizer_enabled ? aws_apigatewayv2_authorizer.websocket_request[0].id : null
   target             = "integrations/${aws_apigatewayv2_integration.ws_connect.id}"
 }
 
@@ -1127,4 +1153,14 @@ resource "aws_lambda_permission" "ws_disconnect_apigw" {
   function_name = aws_lambda_function.ws_disconnect.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.websocket.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "ws_authorizer_apigw" {
+  count = var.websocket_authorizer_enabled ? 1 : 0
+
+  statement_id  = "AllowAPIGatewayInvokeWSAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = var.websocket_authorizer_lambda_arn
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.websocket.execution_arn}/authorizers/${aws_apigatewayv2_authorizer.websocket_request[0].id}"
 }
