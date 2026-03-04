@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -194,6 +195,195 @@ func TestDynamoStoreIntegration_BasicLifecycleAndAtomicUsage(t *testing.T) {
 	if diff := gotRun.TotalCostUSD - wantCost; diff < -1e-9 || diff > 1e-9 {
 		t.Fatalf("unexpected total_cost_usd: got=%f want=%f", gotRun.TotalCostUSD, wantCost)
 	}
+}
+
+func TestDynamoStoreIntegration_ClaimResetAndResumeTransition(t *testing.T) {
+	endpoint := strings.TrimSpace(os.Getenv("AGENTFORGE_INTEGRATION_AWS_ENDPOINT"))
+	if endpoint == "" {
+		t.Skip("set AGENTFORGE_INTEGRATION_AWS_ENDPOINT to run DynamoDB integration tests")
+	}
+
+	ctx := context.Background()
+	client := integrationDynamoClient(t, endpoint)
+
+	cfg := createIntegrationStateTables(t, ctx, client, fmt.Sprintf("af-it-claim-%d", time.Now().UnixNano()))
+	store, err := NewDynamoStore(client, cfg)
+	if err != nil {
+		t.Fatalf("new dynamo store: %v", err)
+	}
+
+	now := time.Now().UTC()
+	task := &model.Task{
+		TaskID:      "task_claim_1",
+		TenantID:    "tenant_claim",
+		UserID:      "user_claim",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_claim_1",
+		Prompt:      "claim/reset integration",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	run1 := &model.Run{
+		TaskID:   task.TaskID,
+		RunID:    "run_claim_1",
+		TenantID: task.TenantID,
+		Status:   model.RunStatusQueued,
+	}
+	if err := store.ApplyCreateTransition(ctx, task, run1); err != nil {
+		t.Fatalf("apply create transition: %v", err)
+	}
+
+	if err := store.ClaimRun(ctx, task.TaskID, run1.RunID); err != nil {
+		t.Fatalf("claim run: %v", err)
+	}
+	if err := store.ClaimRun(ctx, task.TaskID, run1.RunID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second claim expected ErrConflict, got %v", err)
+	}
+	claimedRun, err := store.GetRun(ctx, task.TaskID, run1.RunID)
+	if err != nil {
+		t.Fatalf("get claimed run: %v", err)
+	}
+	if claimedRun.Status != model.RunStatusRunning {
+		t.Fatalf("expected run status RUNNING after claim, got %s", claimedRun.Status)
+	}
+	if claimedRun.StartedAt == nil {
+		t.Fatal("expected started_at to be set after claim")
+	}
+
+	if err := store.ResetRunToQueued(ctx, task.TaskID, run1.RunID); err != nil {
+		t.Fatalf("reset run to queued: %v", err)
+	}
+	resetRun, err := store.GetRun(ctx, task.TaskID, run1.RunID)
+	if err != nil {
+		t.Fatalf("get reset run: %v", err)
+	}
+	if resetRun.Status != model.RunStatusQueued {
+		t.Fatalf("expected run status RUN_QUEUED after reset, got %s", resetRun.Status)
+	}
+	if resetRun.QueuedAt == nil {
+		t.Fatal("expected queued_at to be set after reset")
+	}
+	if resetRun.StartedAt != nil {
+		t.Fatal("expected started_at to be cleared after reset")
+	}
+	if resetRun.EndedAt != nil {
+		t.Fatal("expected ended_at to be cleared after reset")
+	}
+
+	if err := store.UpdateTaskStatus(ctx, task.TaskID, []model.TaskStatus{model.TaskStatusQueued}, model.TaskStatusFailed); err != nil {
+		t.Fatalf("update task status to failed: %v", err)
+	}
+	if err := store.SetAbortRequested(ctx, task.TaskID, "resume test"); err != nil {
+		t.Fatalf("set abort requested: %v", err)
+	}
+
+	run2 := &model.Run{
+		TaskID:      task.TaskID,
+		RunID:       "run_claim_2",
+		TenantID:    task.TenantID,
+		Status:      model.RunStatusQueued,
+		ParentRunID: run1.RunID,
+	}
+	if err := store.ApplyResumeTransition(ctx, task.TaskID, run2, []model.TaskStatus{
+		model.TaskStatusQueued,
+		model.TaskStatusSucceeded,
+		model.TaskStatusFailed,
+		model.TaskStatusAborted,
+	}, model.TaskStatusQueued); err != nil {
+		t.Fatalf("apply resume transition: %v", err)
+	}
+
+	gotTask, err := store.GetTask(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("get task after resume transition: %v", err)
+	}
+	if gotTask.ActiveRunID != run2.RunID {
+		t.Fatalf("expected active_run_id=%s, got %s", run2.RunID, gotTask.ActiveRunID)
+	}
+	if gotTask.Status != model.TaskStatusQueued {
+		t.Fatalf("expected task status QUEUED after resume transition, got %s", gotTask.Status)
+	}
+	if gotTask.AbortRequested {
+		t.Fatal("expected abort_requested to be cleared by resume transition")
+	}
+	if gotTask.AbortReason != "" {
+		t.Fatalf("expected abort_reason to be cleared, got %q", gotTask.AbortReason)
+	}
+	if gotTask.AbortTS != nil {
+		t.Fatal("expected abort_ts to be removed by resume transition")
+	}
+}
+
+func TestDynamoStoreIntegration_CompactEvents(t *testing.T) {
+	endpoint := strings.TrimSpace(os.Getenv("AGENTFORGE_INTEGRATION_AWS_ENDPOINT"))
+	if endpoint == "" {
+		t.Skip("set AGENTFORGE_INTEGRATION_AWS_ENDPOINT to run DynamoDB integration tests")
+	}
+
+	ctx := context.Background()
+	client := integrationDynamoClient(t, endpoint)
+
+	cfg := createIntegrationStateTables(t, ctx, client, fmt.Sprintf("af-it-compact-%d", time.Now().UnixNano()))
+	store, err := NewDynamoStore(client, cfg)
+	if err != nil {
+		t.Fatalf("new dynamo store: %v", err)
+	}
+
+	now := time.Now().UTC()
+	task := &model.Task{
+		TaskID:      "task_compact_1",
+		TenantID:    "tenant_compact",
+		UserID:      "user_compact",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_compact_1",
+		Prompt:      "compact integration",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	run := &model.Run{
+		TaskID:   task.TaskID,
+		RunID:    "run_compact_1",
+		TenantID: task.TenantID,
+		Status:   model.RunStatusQueued,
+	}
+	if err := store.ApplyCreateTransition(ctx, task, run); err != nil {
+		t.Fatalf("apply create transition: %v", err)
+	}
+
+	events := []*model.StreamEvent{
+		{TaskID: task.TaskID, RunID: run.RunID, Seq: 1, TS: 100, Type: model.StreamEventStepStart},
+		{TaskID: task.TaskID, RunID: run.RunID, Seq: 2, TS: 200, Type: model.StreamEventStepEnd},
+		{TaskID: task.TaskID, RunID: run.RunID, Seq: 3, TS: 300, Type: model.StreamEventComplete},
+	}
+	for _, ev := range events {
+		if err := store.PutEvent(ctx, ev); err != nil {
+			t.Fatalf("put event seq=%d: %v", ev.Seq, err)
+		}
+	}
+
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		replayed, err := store.ReplayEvents(ctx, task.TaskID, run.RunID, 0, 0, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(replayed) == 3, nil
+	}, "event replay did not converge before compaction")
+
+	removed, err := store.CompactEvents(ctx, task.TaskID, run.RunID, 300)
+	if err != nil {
+		t.Fatalf("compact events: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("expected 2 events removed by compaction, got %d", removed)
+	}
+
+	waitForDynamoIntegrationCondition(t, 5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		replayed, err := store.ReplayEvents(ctx, task.TaskID, run.RunID, 0, 0, 10)
+		if err != nil {
+			return false, err
+		}
+		return len(replayed) == 1 && replayed[0].Seq == 3 && replayed[0].TS == 300, nil
+	}, "event replay did not converge after compaction")
 }
 
 func integrationDynamoClient(t *testing.T, endpoint string) *dynamodb.Client {

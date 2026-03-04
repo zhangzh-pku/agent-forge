@@ -47,7 +47,6 @@
 | R-124 | `CC-O3` | 暴露 `/metrics`（请求、错误、延迟、队列等核心指标）。 |
 | R-125 | `CC-O4` | Logger 增强（等级、时间戳、写入语义一致性）。 |
 | R-126 | `CC-O5` | Terraform 增加 CloudWatch Dashboard。 |
-| R-128 | `REL-S4` | Dynamo 可靠性集成测试扩展到 claim/transition/compaction/unprocessed-items。 |
 | R-130 | `REL-S8` | 事件推送改为有界并发 + 单连接超时 + 限流。 |
 | R-132 | `SEC-SHOULD-04`, `CC-N17` | IAM 权限最小化收敛（含审计流程），减少广泛 `Scan`/过宽 S3 动作。 |
 
