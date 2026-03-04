@@ -166,15 +166,7 @@ func estimateRequestCostUSD(req *LLMRequest, modelID string) float64 {
 	if req.ModelConfig != nil && req.ModelConfig.MaxTokens > 0 {
 		approxTokens = req.ModelConfig.MaxTokens + 256
 	}
-	rate := map[string]float64{
-		"gpt-4o-mini": 0.00035,
-		"gpt-4o":      0.00500,
-		"gpt-4.1":     0.00600,
-	}
-	r, ok := rate[strings.ToLower(strings.TrimSpace(modelID))]
-	if !ok {
-		r = rate["gpt-4o-mini"]
-	}
+	r := resolveModelRateUSDPer1K(modelID, defaultRequestModelPricingUSDPer1K)
 	return (float64(approxTokens) / 1000.0) * r
 }
 
@@ -183,18 +175,7 @@ func EstimateUsageCostUSD(modelID string, usage *model.TokenUsage) float64 {
 	if usage == nil || usage.Total <= 0 {
 		return 0
 	}
-	rate := map[string]float64{
-		"gpt-4o-mini":     0.00035,
-		"gpt-4o":          0.00500,
-		"gpt-4.1":         0.00600,
-		"claude-3-haiku":  0.00080,
-		"claude-3-sonnet": 0.00300,
-		"claude-3-opus":   0.01500,
-	}
-	r, ok := rate[strings.ToLower(strings.TrimSpace(modelID))]
-	if !ok {
-		r = rate["gpt-4o-mini"]
-	}
+	r := resolveModelRateUSDPer1K(modelID, defaultUsageModelPricingUSDPer1K)
 	return (float64(usage.Total) / 1000.0) * r
 }
 

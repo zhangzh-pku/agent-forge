@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/agentforge/agentforge/pkg/model"
@@ -101,5 +102,28 @@ func TestShouldFallbackOnErrorDefaultFalseForUnknown(t *testing.T) {
 func TestShouldFallbackOnErrorRetryableStillTrue(t *testing.T) {
 	if !shouldFallbackOnError(errors.New("status 503 unavailable")) {
 		t.Fatal("expected retryable errors to trigger fallback")
+	}
+}
+
+func TestEstimateUsageCostUSDWithPricingOverride(t *testing.T) {
+	t.Setenv(modelPricingOverridesEnv, "gpt-4o-mini=0.123")
+
+	cost := EstimateUsageCostUSD("gpt-4o-mini", &model.TokenUsage{Total: 1000})
+	if math.Abs(cost-0.123) > 1e-9 {
+		t.Fatalf("expected overridden cost 0.123, got %.9f", cost)
+	}
+}
+
+func TestEstimateRequestCostUSDWithPricingOverride(t *testing.T) {
+	t.Setenv(modelPricingOverridesEnv, "gpt-4o=0.001")
+
+	req := &LLMRequest{
+		ModelConfig: &model.ModelConfig{
+			MaxTokens: 744, // 744 + 256 buffer = 1000 tokens
+		},
+	}
+	cost := estimateRequestCostUSD(req, "gpt-4o")
+	if math.Abs(cost-0.001) > 1e-9 {
+		t.Fatalf("expected overridden request cost 0.001, got %.9f", cost)
 	}
 }

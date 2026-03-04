@@ -22,6 +22,7 @@ This document is the canonical environment-variable reference for AgentForge.
 | `AGENTFORGE_ALLOWED_MODEL_IDS` | _(built-in set)_ | Comma-separated allowlist used to validate `model_config.model_id` and fallback model IDs. |
 | `AGENTFORGE_PROMPT_MAX_CHARS` | `16000` | Maximum prompt length (Unicode rune count); oversized prompts are rejected. |
 | `AGENTFORGE_PROMPT_DENYLIST` | _(empty)_ | Optional comma-separated deny-list terms; matching prompts are rejected. |
+| `AGENTFORGE_MODEL_PRICING_OVERRIDES` | _(empty)_ | Optional comma-separated `model=usd_per_1k_tokens` overrides for cost estimation/routing (e.g. `gpt-4o-mini=0.00035,gpt-4o=0.005`). |
 | `AGENTFORGE_LLM_TIMEOUT_SECONDS` | `60` | LLM request timeout. |
 | `OPENAI_API_KEY` | _(none)_ | Required when provider is `openai`. |
 | `OPENAI_API_KEY_SECRET_ARN` | _(empty)_ | Optional Secrets Manager secret ARN used to resolve OpenAI API key at startup. |
