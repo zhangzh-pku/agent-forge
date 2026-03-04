@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentforge/agentforge/internal/util"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
-	"github.com/agentforge/agentforge/pkg/util"
 )
 
 // CreateRequest is the input for creating a new task.

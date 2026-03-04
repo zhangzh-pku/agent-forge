@@ -93,7 +93,6 @@ cmd/
 pkg/
   api/              HTTP handlers, auth middleware, WebSocket handlers
   artifact/         Artifact store interface + S3 + in-memory implementations
-  config/           Runtime and environment configuration loading
   engine/           ReAct execution loop, LLM client interface, tool registry, worker
   memory/           Memory snapshot serialization (save/load to artifact store)
   model/            Domain types (Task, Run, Step, Connection, StreamEvent, etc.)
@@ -101,8 +100,12 @@ pkg/
   state/            Metadata store interface + DynamoDB + in-memory implementations
   stream/           Stream events, chunker (time/byte flush), pusher interface
   task/             Task lifecycle service (create, get, abort, resume)
-  util/             ID generation, structured logging
   workspace/        VFS with quotas, snapshot/restore, path safety
+
+internal/
+  config/           Runtime and environment configuration loading
+  ops/              Recovery, consistency checker, and scheduler orchestration
+  util/             ID generation and structured logging helpers
 
 deploy/
   terraform/        Infrastructure-as-Code skeleton (DynamoDB, SQS, S3, Lambda, API GW)

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentforge/agentforge/pkg/util"
+	"github.com/agentforge/agentforge/internal/util"
 )
 
 // TenantInfo holds authentication context extracted from the request.

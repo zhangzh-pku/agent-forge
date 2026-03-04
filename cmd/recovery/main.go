@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	appcfg "github.com/agentforge/agentforge/pkg/config"
-	"github.com/agentforge/agentforge/pkg/ops"
+	appcfg "github.com/agentforge/agentforge/internal/config"
+	"github.com/agentforge/agentforge/internal/ops"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"

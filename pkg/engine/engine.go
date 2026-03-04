@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentforge/agentforge/internal/util"
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/memory"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
-	"github.com/agentforge/agentforge/pkg/util"
 	"github.com/agentforge/agentforge/pkg/workspace"
 )
 

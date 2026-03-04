@@ -24,7 +24,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-219 | `CC-C17` | `internal/` 迁移（`pkg/config`, `pkg/util`, `pkg/ops`）。 |
 | R-221 | `CC-C19` | 清理历史中误提交的构建产物（`bin/`）。 |
 
 ## P3 - 长期增强与加固

@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
+	appcfg "github.com/agentforge/agentforge/internal/config"
+	"github.com/agentforge/agentforge/internal/ops"
 	"github.com/agentforge/agentforge/pkg/api"
 	artstore "github.com/agentforge/agentforge/pkg/artifact"
-	appcfg "github.com/agentforge/agentforge/pkg/config"
 	"github.com/agentforge/agentforge/pkg/engine"
-	"github.com/agentforge/agentforge/pkg/ops"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/runtimemetrics"
 	"github.com/agentforge/agentforge/pkg/state"

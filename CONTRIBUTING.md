@@ -66,7 +66,7 @@ go test -short ./...
 
 - Keep functions focused and well-documented. Exported functions must have doc comments.
 - Error messages should be lowercase and should not end with punctuation.
-- Prefer introducing configuration via environment variables under `pkg/config` instead of ad-hoc parsing in command entrypoints.
+- Prefer introducing configuration via environment variables under `internal/config` instead of ad-hoc parsing in command entrypoints.
 
 ## Submitting a Pull Request
 

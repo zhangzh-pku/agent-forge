@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	appcfg "github.com/agentforge/agentforge/internal/config"
 	artstore "github.com/agentforge/agentforge/pkg/artifact"
-	appcfg "github.com/agentforge/agentforge/pkg/config"
 	"github.com/agentforge/agentforge/pkg/engine"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"

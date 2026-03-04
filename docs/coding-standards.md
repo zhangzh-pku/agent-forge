@@ -11,7 +11,7 @@
 
 - Put domain types in `pkg/model`.
 - Keep command entrypoints (`cmd/*`) thin; prefer reusable logic in `pkg/*`.
-- Centralize environment parsing in `pkg/config`.
+- Centralize environment parsing in `internal/config`.
 - Prefer interfaces (`pkg/state`, `pkg/queue`, `pkg/artifact`) for backend implementations.
 
 ## Testing

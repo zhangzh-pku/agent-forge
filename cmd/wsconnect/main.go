@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	appcfg "github.com/agentforge/agentforge/pkg/config"
+	appcfg "github.com/agentforge/agentforge/internal/config"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/state"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
