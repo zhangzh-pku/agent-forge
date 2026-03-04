@@ -21,6 +21,23 @@ func (f *failingQueue) StartConsumer(_ context.Context, _ queue.MessageHandler) 
 	return nil
 }
 
+type flakyQueue struct {
+	failuresLeft int
+	inner        queue.Queue
+}
+
+func (f *flakyQueue) Enqueue(ctx context.Context, msg *model.SQSMessage) error {
+	if f.failuresLeft > 0 {
+		f.failuresLeft--
+		return errors.New("enqueue failed")
+	}
+	return f.inner.Enqueue(ctx, msg)
+}
+
+func (f *flakyQueue) StartConsumer(ctx context.Context, handler queue.MessageHandler) error {
+	return f.inner.StartConsumer(ctx, handler)
+}
+
 func newTestService() (*Service, *state.MemoryStore, *queue.MemoryQueue) {
 	store := state.NewMemoryStore()
 	q := queue.NewMemoryQueue(100)
@@ -422,7 +439,7 @@ func TestResumeEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
 	}
 }
 
-func TestCreateEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
+func TestCreateEnqueueFailureKeepsRunAndTaskQueued(t *testing.T) {
 	store := state.NewMemoryStore()
 	svc := NewService(store, &failingQueue{})
 	ctx := context.Background()
@@ -445,16 +462,76 @@ func TestCreateEnqueueFailureMarksRunAndTaskFailed(t *testing.T) {
 	}
 
 	taskObj := tasks[0]
-	if taskObj.Status != model.TaskStatusFailed {
-		t.Fatalf("expected task FAILED after enqueue failure, got %s", taskObj.Status)
+	if taskObj.Status != model.TaskStatusQueued {
+		t.Fatalf("expected task QUEUED after enqueue failure, got %s", taskObj.Status)
 	}
 
 	run, err := store.GetRun(ctx, taskObj.TaskID, taskObj.ActiveRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != model.RunStatusFailed {
-		t.Fatalf("expected run FAILED after enqueue failure, got %s", run.Status)
+	if run.Status != model.RunStatusQueued {
+		t.Fatalf("expected run RUN_QUEUED after enqueue failure, got %s", run.Status)
+	}
+}
+
+func TestCreateIdempotencyRetryReenqueuesQueuedRun(t *testing.T) {
+	store := state.NewMemoryStore()
+	memQ := queue.NewMemoryQueue(10)
+	flaky := &flakyQueue{
+		failuresLeft: 1,
+		inner:        memQ,
+	}
+	svc := NewService(store, flaky)
+	ctx := context.Background()
+
+	req := &CreateRequest{
+		TenantID:       "tnt_1",
+		UserID:         "user_1",
+		Prompt:         "retry me",
+		IdempotencyKey: "idem_retry_1",
+	}
+	_, err := svc.Create(ctx, req)
+	if err == nil {
+		t.Fatal("expected first create to fail enqueue")
+	}
+
+	tasks, err := store.ListTasks(ctx, "tnt_1", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	taskObj := tasks[0]
+	if taskObj.Status != model.TaskStatusQueued {
+		t.Fatalf("expected queued task after first failure, got %s", taskObj.Status)
+	}
+
+	resp, err := svc.Create(ctx, req)
+	if err != nil {
+		t.Fatalf("expected idempotent retry to succeed, got %v", err)
+	}
+	if resp.TaskID != taskObj.TaskID || resp.RunID != taskObj.ActiveRunID {
+		t.Fatalf("expected same task/run IDs on idempotent retry, got %+v", resp)
+	}
+
+	consumeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got := make(chan *model.SQSMessage, 1)
+	go memQ.StartConsumer(consumeCtx, func(_ context.Context, msg *model.SQSMessage) error {
+		got <- msg
+		cancel()
+		return nil
+	})
+	<-consumeCtx.Done()
+	select {
+	case msg := <-got:
+		if msg.TaskID != resp.TaskID || msg.RunID != resp.RunID {
+			t.Fatalf("expected re-enqueued message for task=%s run=%s, got task=%s run=%s", resp.TaskID, resp.RunID, msg.TaskID, msg.RunID)
+		}
+	default:
+		t.Fatal("expected queued run to be re-enqueued on idempotent retry")
 	}
 }
 

@@ -104,6 +104,11 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 	if req.IdempotencyKey != "" {
 		existing, err := s.store.GetTaskByIdempotencyKey(ctx, req.TenantID, req.IdempotencyKey)
 		if err == nil {
+			// Best-effort self-healing for create path gaps: if the active run is
+			// still queued, ensure it is (re-)enqueued.
+			if err := s.ensureActiveQueuedRunEnqueued(ctx, existing); err != nil {
+				return nil, err
+			}
 			return &CreateResponse{TaskID: existing.TaskID, RunID: existing.ActiveRunID}, nil
 		}
 		if !errors.Is(err, state.ErrNotFound) {
@@ -149,22 +154,8 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		return nil, err
 	}
 
-	taskType := InferTaskType(req.Prompt)
-	estimatedTokens, estimatedCost := EstimateUsage(req.Prompt, normalizedMC)
-
 	// Enqueue pointer message.
-	if err := s.queue.Enqueue(ctx, &model.SQSMessage{
-		TenantID:        req.TenantID,
-		TaskID:          taskID,
-		RunID:           runID,
-		TaskType:        taskType,
-		SubmittedAt:     now.Unix(),
-		Attempt:         1,
-		DedupeKey:       taskID + "#" + runID,
-		EstimatedTokens: estimatedTokens,
-		EstimatedCost:   estimatedCost,
-	}); err != nil {
-		s.markRunAndTaskFailed(taskID, runID)
+	if err := s.enqueueQueuedRun(ctx, task, run, now); err != nil {
 		return nil, err
 	}
 
@@ -515,4 +506,41 @@ func (s *Service) markRunAndTaskFailed(taskID, runID string) {
 		model.TaskStatusQueued,
 		model.TaskStatusRunning,
 	}, model.TaskStatusFailed)
+}
+
+func (s *Service) ensureActiveQueuedRunEnqueued(ctx context.Context, taskObj *model.Task) error {
+	if taskObj == nil || taskObj.ActiveRunID == "" {
+		return nil
+	}
+	run, err := s.store.GetRun(ctx, taskObj.TaskID, taskObj.ActiveRunID)
+	if err != nil {
+		return err
+	}
+	return s.enqueueQueuedRun(ctx, taskObj, run, time.Now().UTC())
+}
+
+func (s *Service) enqueueQueuedRun(ctx context.Context, taskObj *model.Task, run *model.Run, submittedAt time.Time) error {
+	if taskObj == nil || run == nil {
+		return nil
+	}
+	if taskObj.Status != model.TaskStatusQueued || run.Status != model.RunStatusQueued {
+		return nil
+	}
+	tenantID := taskObj.TenantID
+	if strings.TrimSpace(run.TenantID) != "" {
+		tenantID = strings.TrimSpace(run.TenantID)
+	}
+	taskType := InferTaskType(taskObj.Prompt)
+	estimatedTokens, estimatedCost := EstimateUsage(taskObj.Prompt, run.ModelConfig)
+	return s.queue.Enqueue(ctx, &model.SQSMessage{
+		TenantID:        tenantID,
+		TaskID:          taskObj.TaskID,
+		RunID:           run.RunID,
+		TaskType:        taskType,
+		SubmittedAt:     submittedAt.Unix(),
+		Attempt:         1,
+		DedupeKey:       taskObj.TaskID + "#" + run.RunID,
+		EstimatedTokens: estimatedTokens,
+		EstimatedCost:   estimatedCost,
+	})
 }

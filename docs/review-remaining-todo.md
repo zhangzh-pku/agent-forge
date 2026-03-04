@@ -17,7 +17,6 @@
 | R-002 | `CC-S7` | 为关键 Lambda（至少 worker）设置 `reserved_concurrent_executions`，与上游配额对齐。 |
 | R-003 | `CC-S8`, `REL-S6`, `SEC-NICE-03` | 补齐关键告警基线：当前仅 recovery 告警已落地，还需 DLQ depth、worker error rate、API 5xx、关键安全拒绝事件。 |
 | R-004 | `CC-D2` | `OPENAI_API_KEY` 从明文环境变量迁移到 AWS Secrets Manager（启动期拉取）。 |
-| R-006 | `CC-D7`, `REL-S3` | 完成 Create 路径“落库+入队”事务化或 outbox（Resume 已部分原子化，Create 仍为独立调用）。 |
 | R-007 | `SEC-MUST-01`, `SEC-MUST-02`, `CC-S1..S3` | Terraform 增加并绑定 `aws_apigatewayv2_authorizer`（HTTP + WebSocket），形成可验证的 JWT/claims 身份链路（当前无显式 authorizer 资源）。 |
 
 ## P1 - 可靠性、引擎与 API 行为
