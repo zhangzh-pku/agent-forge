@@ -13,7 +13,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-003 | `CC-S8`, `REL-S6`, `SEC-NICE-03` | 补齐关键告警基线：当前仅 recovery 告警已落地，还需 DLQ depth、worker error rate、API 5xx、关键安全拒绝事件。 |
 
 ## P1 - 可靠性、引擎与 API 行为
 

@@ -1106,6 +1106,30 @@ resource "aws_cloudwatch_metric_alarm" "http_api_5xx" {
   }
 }
 
+# WAF blocked-request alarm (security reject baseline)
+resource "aws_cloudwatch_metric_alarm" "http_waf_blocked_requests" {
+  count = var.waf_enabled ? 1 : 0
+
+  alarm_name          = "agentforge-http-waf-blocked-${var.environment}"
+  alarm_description   = "WAF blocked one or more requests."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BlockedRequests"
+  namespace           = "AWS/WAFV2"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.recovery_alarm_actions
+  ok_actions          = var.recovery_alarm_actions
+
+  dimensions = {
+    WebACL = aws_wafv2_web_acl.http_api[0].name
+    Rule   = "ALL"
+    Region = data.aws_region.current.name
+  }
+}
+
 resource "aws_cloudwatch_dashboard" "agentforge" {
   count = var.dashboard_enabled ? 1 : 0
 
