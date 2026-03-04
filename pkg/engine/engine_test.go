@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -429,6 +431,35 @@ type errorLLMClient struct {
 
 func (c *errorLLMClient) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, error) {
 	return nil, c.err
+}
+
+type concurrencyProbePusher struct {
+	delay       time.Duration
+	inFlight    atomic.Int64
+	maxInFlight atomic.Int64
+	calls       atomic.Int64
+}
+
+func (p *concurrencyProbePusher) Push(ctx context.Context, _ string, _ *model.StreamEvent) (bool, error) {
+	curr := p.inFlight.Add(1)
+	for {
+		prev := p.maxInFlight.Load()
+		if curr <= prev {
+			break
+		}
+		if p.maxInFlight.CompareAndSwap(prev, curr) {
+			break
+		}
+	}
+	p.calls.Add(1)
+	defer p.inFlight.Add(-1)
+
+	select {
+	case <-ctx.Done():
+		return true, ctx.Err()
+	case <-time.After(p.delay):
+		return true, nil
+	}
 }
 
 type lengthThenStopLLM struct {
@@ -1030,6 +1061,44 @@ func TestEnginePushEventSanitizesSensitivePayloads(t *testing.T) {
 	storedArgs, _ := storedToolCall["args"].(string)
 	if strings.Contains(storedArgs, "sk-live-xyz") || !strings.Contains(storedArgs, eventTextRedacted) {
 		t.Fatalf("stored tool_call args not sanitized: %s", storedArgs)
+	}
+}
+
+func TestEnginePushEventUsesBoundedConcurrency(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	const connectionCount = streamPushMaxConcurrency*3 + 5
+	for i := 0; i < connectionCount; i++ {
+		if err := h.store.PutConnection(context.Background(), &model.Connection{
+			ConnectionID: fmt.Sprintf("conn_%d", i),
+			TenantID:     h.task.TenantID,
+			UserID:       h.task.UserID,
+			TaskID:       h.task.TaskID,
+			RunID:        h.run.RunID,
+			ConnectedAt:  time.Now().UTC(),
+			TTL:          time.Now().Add(2 * time.Hour).Unix(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pusher := &concurrencyProbePusher{delay: 50 * time.Millisecond}
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, nil, nil, pusher)
+
+	var seq int64
+	eng.pushEvent(context.Background(), h.task.TenantID, h.task.TaskID, h.run.RunID, &seq, model.StreamEventTokenChunk, map[string]interface{}{
+		"token": "x",
+	})
+
+	if got := pusher.calls.Load(); got != int64(connectionCount) {
+		t.Fatalf("expected %d push calls, got %d", connectionCount, got)
+	}
+	if got := pusher.maxInFlight.Load(); got > int64(streamPushMaxConcurrency) {
+		t.Fatalf("expected max in-flight <= %d, got %d", streamPushMaxConcurrency, got)
+	}
+	if got := pusher.maxInFlight.Load(); got < 2 {
+		t.Fatalf("expected concurrent pushes, max in-flight was %d", got)
 	}
 }
 

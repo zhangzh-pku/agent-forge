@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
@@ -31,6 +32,8 @@ const (
 	maxEngineMemoryMessages    = 64
 	maxConsecutiveLengthStops  = 3
 	lengthContinuePrompt       = "Your previous response was truncated due to length. Continue exactly from where you stopped, without repeating prior content."
+	streamPushMaxConcurrency   = 16
+	streamPushPerConnTimeout   = 2 * time.Second
 )
 
 var (
@@ -605,23 +608,65 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 	if err != nil || len(conns) == 0 {
 		return
 	}
+
+	targets := make([]*model.Connection, 0, len(conns))
 	for _, conn := range conns {
-		// Tenant isolation: skip connections belonging to a different tenant.
 		if tenantID != "" && conn.TenantID != tenantID {
 			continue
 		}
-		alive, pushErr := e.pusher.Push(ctx, conn.ConnectionID, event)
-		if pushErr != nil {
-			e.metrics.StreamPushError()
-		}
-		if !alive {
-			// Connection gone (410) — clean up.
-			if err := e.store.DeleteConnection(ctx, conn.ConnectionID); err != nil {
-				e.log.Error("engine: delete stale connection failed", map[string]interface{}{
-					"error":         err.Error(),
-					"connection_id": conn.ConnectionID,
-				})
+		targets = append(targets, conn)
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	concurrency := streamPushMaxConcurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > len(targets) {
+		concurrency = len(targets)
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	staleConnections := make(chan string, len(targets))
+
+	for _, conn := range targets {
+		c := conn
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			pushCtx, cancel := context.WithTimeout(ctx, streamPushPerConnTimeout)
+			alive, pushErr := e.pusher.Push(pushCtx, c.ConnectionID, event)
+			cancel()
+
+			if pushErr != nil {
+				e.metrics.StreamPushError()
 			}
+			if !alive {
+				staleConnections <- c.ConnectionID
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(staleConnections)
+
+	seen := make(map[string]struct{}, len(targets))
+	for connectionID := range staleConnections {
+		if _, ok := seen[connectionID]; ok {
+			continue
+		}
+		seen[connectionID] = struct{}{}
+		if err := e.store.DeleteConnection(ctx, connectionID); err != nil {
+			e.log.Error("engine: delete stale connection failed", map[string]interface{}{
+				"error":         err.Error(),
+				"connection_id": connectionID,
+			})
 		}
 	}
 }
