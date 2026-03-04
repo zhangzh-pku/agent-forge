@@ -59,8 +59,6 @@
 | R-204 | `CC-T4` | `make test` 与 `-race` 策略统一（按约定强制）。 |
 | R-205 | `CC-T5` | 新增 `finish_reason="length"` 场景回归测试。 |
 | R-206 | `CC-T7` | 新增 `fs.export` goroutine 泄漏回归测试。 |
-| R-207 | `CC-T8` | 新增 streaming abort 中断测试。 |
-| R-208 | `CC-T9` | 新增 API 并发幂等竞态测试。 |
 | R-209 | `CC-T10` | 新增 `task/estimation.go` 全函数测试。 |
 | R-210 | `CC-T11` | 新增 health/ready endpoint 测试。 |
 | R-211 | `CC-C4`, `MAIN-Nice-1` | 发布自动化：`.goreleaser.yml` + `release.yml`（tag 触发）。 |

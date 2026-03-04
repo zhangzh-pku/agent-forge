@@ -424,6 +424,41 @@ func TestEngineContextCancellation(t *testing.T) {
 	}
 }
 
+func TestEngineStreamingCancellationDuringResponse(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	llm := &slowStreamingLLM{chunks: 500, delay: 5 * time.Millisecond}
+	registry := NewRegistry()
+	for _, tool := range NewFSTools(h.ws) {
+		registry.Register(tool)
+	}
+
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, registry, h.pusher)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	result, err := eng.Execute(ctx, h.task, h.run, h.ws)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusFailed {
+		t.Fatalf("expected FAILED on mid-stream cancellation, got %s", result.Status)
+	}
+	if !strings.Contains(strings.ToLower(result.ErrorMessage), "context canceled") {
+		t.Fatalf("expected context cancellation message, got %q", result.ErrorMessage)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected prompt cancellation handling, elapsed=%s", elapsed)
+	}
+}
+
 // errorLLMClient returns an error on every call.
 type errorLLMClient struct {
 	err error
@@ -431,6 +466,43 @@ type errorLLMClient struct {
 
 func (c *errorLLMClient) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, error) {
 	return nil, c.err
+}
+
+type slowStreamingLLM struct {
+	chunks int
+	delay  time.Duration
+}
+
+func (l *slowStreamingLLM) Chat(ctx context.Context, _ *LLMRequest) (*LLMResponse, error) {
+	return l.ChatStream(ctx, nil, nil)
+}
+
+func (l *slowStreamingLLM) ChatStream(ctx context.Context, _ *LLMRequest, onToken func(token string)) (*LLMResponse, error) {
+	chunks := l.chunks
+	if chunks <= 0 {
+		chunks = 100
+	}
+	delay := l.delay
+	if delay <= 0 {
+		delay = 10 * time.Millisecond
+	}
+	for i := 0; i < chunks; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		if onToken != nil {
+			onToken("x")
+		}
+	}
+	return &LLMResponse{
+		Content:      "done",
+		FinishReason: "stop",
+		TokenUsage:   &model.TokenUsage{Input: 1, Output: 1, Total: 2},
+		ModelID:      "mock-stream",
+		Provider:     "mock",
+	}, nil
 }
 
 type concurrencyProbePusher struct {

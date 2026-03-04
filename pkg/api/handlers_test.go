@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,6 +130,81 @@ func TestCreateTaskIdempotency(t *testing.T) {
 
 	if resp1["task_id"] != resp2["task_id"] {
 		t.Fatalf("idempotency failed: %s != %s", resp1["task_id"], resp2["task_id"])
+	}
+}
+
+func TestCreateTaskIdempotencyConcurrentRequests(t *testing.T) {
+	mux, store := setupTestServer()
+
+	const workers = 24
+	payload := map[string]string{
+		"prompt":          "hello concurrent idempotency",
+		"idempotency_key": "idem_concurrent_1",
+	}
+
+	type createResp struct {
+		TaskID string `json:"task_id"`
+		RunID  string `json:"run_id"`
+	}
+
+	responses := make(chan createResp, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rr := doRequest(mux, "POST", "/tasks", payload)
+			if rr.Code != http.StatusCreated {
+				errs <- fmt.Errorf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
+				return
+			}
+			var resp createResp
+			if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+				errs <- fmt.Errorf("decode response: %w", err)
+				return
+			}
+			if resp.TaskID == "" || resp.RunID == "" {
+				errs <- fmt.Errorf("empty ids in response: %+v", resp)
+				return
+			}
+			responses <- resp
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(responses)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var first *createResp
+	for resp := range responses {
+		r := resp
+		if first == nil {
+			first = &r
+			continue
+		}
+		if r.TaskID != first.TaskID || r.RunID != first.RunID {
+			t.Fatalf("expected all responses to share same task/run, first=%+v got=%+v", *first, r)
+		}
+	}
+	if first == nil {
+		t.Fatal("expected at least one successful response")
+	}
+
+	tasks, err := store.ListTasks(context.Background(), "tnt_1", nil, 100)
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected exactly one task persisted, got %d", len(tasks))
+	}
+	if tasks[0].TaskID != first.TaskID || tasks[0].ActiveRunID != first.RunID {
+		t.Fatalf("stored task mismatch, want task=%s run=%s got task=%s run=%s", first.TaskID, first.RunID, tasks[0].TaskID, tasks[0].ActiveRunID)
 	}
 }
 
