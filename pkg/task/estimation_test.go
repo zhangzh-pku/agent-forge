@@ -59,4 +59,3 @@ func TestEstimateModelCostUSDFallbackAndZero(t *testing.T) {
 		t.Fatalf("expected 0 cost for non-positive tokens, got %f", got)
 	}
 }
-
