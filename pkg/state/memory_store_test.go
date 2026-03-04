@@ -549,6 +549,31 @@ func TestResetRunToQueued(t *testing.T) {
 	if got.StartedAt != nil || got.EndedAt != nil {
 		t.Fatal("expected started_at and ended_at cleared")
 	}
+	if got.QueuedAt == nil {
+		t.Fatal("expected queued_at to be set when resetting to RUN_QUEUED")
+	}
+}
+
+func TestPutRunQueuedSetsQueuedAt(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	run := &model.Run{
+		TaskID:   "task_1",
+		RunID:    "run_1",
+		TenantID: "tnt_1",
+		Status:   model.RunStatusQueued,
+	}
+	if err := s.PutRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRun(ctx, "task_1", "run_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.QueuedAt == nil {
+		t.Fatal("expected queued_at to be populated for queued run")
+	}
 }
 
 func TestListTasksAndRuns(t *testing.T) {

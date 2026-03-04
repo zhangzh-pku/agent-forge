@@ -71,6 +71,10 @@ func cloneRun(r *model.Run) *model.Run {
 		}
 		clone.ModelConfig = &mc
 	}
+	if r.QueuedAt != nil {
+		ts := *r.QueuedAt
+		clone.QueuedAt = &ts
+	}
 	if r.StartedAt != nil {
 		ts := *r.StartedAt
 		clone.StartedAt = &ts
@@ -123,6 +127,7 @@ func cloneEvent(ev *model.StreamEvent) *model.StreamEvent {
 // --- TaskStore ---
 
 func (s *MemoryStore) ApplyCreateTransition(_ context.Context, task *model.Task, run *model.Run) error {
+	run = ensureQueuedAt(run, time.Now().UTC())
 	if task == nil || run == nil || task.TaskID == "" || run.TaskID == "" || run.RunID == "" {
 		return ErrConflict
 	}
@@ -288,6 +293,7 @@ func (s *MemoryStore) SetActiveRun(_ context.Context, taskID string, runID strin
 }
 
 func (s *MemoryStore) ApplyResumeTransition(_ context.Context, taskID string, run *model.Run, from []model.TaskStatus, to model.TaskStatus) error {
+	run = ensureQueuedAt(run, time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -380,6 +386,7 @@ func (s *MemoryStore) ListTasks(_ context.Context, tenantID string, statuses []m
 // --- RunStore ---
 
 func (s *MemoryStore) PutRun(_ context.Context, run *model.Run) error {
+	run = ensureQueuedAt(run, time.Now().UTC())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -475,7 +482,9 @@ func (s *MemoryStore) ResetRunToQueued(_ context.Context, taskID, runID string) 
 	if !ok {
 		return ErrNotFound
 	}
+	now := time.Now().UTC()
 	r.Status = model.RunStatusQueued
+	r.QueuedAt = &now
 	r.StartedAt = nil
 	r.EndedAt = nil
 	return nil

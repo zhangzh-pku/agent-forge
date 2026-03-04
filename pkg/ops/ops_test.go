@@ -75,6 +75,73 @@ func TestRecoverStaleRuns(t *testing.T) {
 	}
 }
 
+func TestRecoverStaleQueuedRunUsesQueuedAt(t *testing.T) {
+	store := state.NewMemoryStore()
+	q := queue.NewMemoryQueue(10)
+	rec := NewRecoverer(store, q)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	queuedAt := now.Add(-30 * time.Minute)
+	taskObj := &model.Task{
+		TaskID:      "task_queued",
+		TenantID:    "t1",
+		UserID:      "u1",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_queued",
+		Prompt:      "test",
+		CreatedAt:   now.Add(-40 * time.Minute),
+		// Fresh updated_at should not mask stale queued_at.
+		UpdatedAt: now.Add(-1 * time.Minute),
+	}
+	run := &model.Run{
+		TaskID:    "task_queued",
+		RunID:     "run_queued",
+		TenantID:  "t1",
+		Status:    model.RunStatusQueued,
+		QueuedAt:  &queuedAt,
+		StartedAt: nil,
+	}
+	if err := store.PutTask(ctx, taskObj); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := rec.RecoverStaleRuns(ctx, "t1", 10*time.Minute, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Recovered != 1 {
+		t.Fatalf("expected recovered=1, got %+v", report)
+	}
+}
+
+func TestIsRunStaleQueuedFallsBackToTaskUpdatedAtWhenQueuedAtMissing(t *testing.T) {
+	now := time.Now().UTC()
+	taskObj := &model.Task{
+		TaskID:      "task_legacy",
+		TenantID:    "t1",
+		UserID:      "u1",
+		Status:      model.TaskStatusQueued,
+		ActiveRunID: "run_legacy",
+		Prompt:      "test",
+		CreatedAt:   now.Add(-40 * time.Minute),
+		UpdatedAt:   now.Add(-30 * time.Minute),
+	}
+	run := &model.Run{
+		TaskID:   "task_legacy",
+		RunID:    "run_legacy",
+		TenantID: "t1",
+		Status:   model.RunStatusQueued,
+		QueuedAt: nil,
+	}
+	if !isRunStale(run, taskObj, now, 10*time.Minute) {
+		t.Fatal("expected queued run without queued_at to fall back to task.updated_at")
+	}
+}
+
 func TestConsistencyCheckAndRepair(t *testing.T) {
 	store := state.NewMemoryStore()
 	checker := NewConsistencyChecker(store)

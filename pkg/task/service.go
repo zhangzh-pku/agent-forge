@@ -133,6 +133,7 @@ func (s *Service) Create(ctx context.Context, req *CreateRequest) (*CreateRespon
 		RunID:       runID,
 		TenantID:    req.TenantID,
 		Status:      model.RunStatusQueued,
+		QueuedAt:    &now,
 		ModelConfig: normalizedMC,
 	}
 
@@ -291,6 +292,7 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 		RunID:               newRunID,
 		TenantID:            req.TenantID,
 		Status:              model.RunStatusQueued,
+		QueuedAt:            &now,
 		ParentRunID:         req.FromRunID,
 		ResumeFromStepIndex: &stepIdx,
 		ModelConfig:         mc,

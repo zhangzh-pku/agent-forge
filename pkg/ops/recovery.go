@@ -104,6 +104,10 @@ func (r *Recoverer) RecoverStaleRuns(ctx context.Context, tenantID string, stale
 func isRunStale(run *model.Run, taskObj *model.Task, now time.Time, staleFor time.Duration) bool {
 	switch run.Status {
 	case model.RunStatusQueued:
+		if run.QueuedAt != nil {
+			return now.Sub(*run.QueuedAt) >= staleFor
+		}
+		// Backward compatibility for historical runs created before queued_at existed.
 		age := now.Sub(taskObj.UpdatedAt)
 		return age >= staleFor
 	case model.RunStatusRunning:

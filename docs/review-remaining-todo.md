@@ -48,7 +48,6 @@
 | R-124 | `CC-O3` | 暴露 `/metrics`（请求、错误、延迟、队列等核心指标）。 |
 | R-125 | `CC-O4` | Logger 增强（等级、时间戳、写入语义一致性）。 |
 | R-126 | `CC-O5` | Terraform 增加 CloudWatch Dashboard。 |
-| R-127 | `REL-S2` | stale 判定引入 run 级 `queued_at`，避免依赖 task.updated_at。 |
 | R-128 | `REL-S4` | Dynamo 可靠性集成测试扩展到 claim/transition/compaction/unprocessed-items。 |
 | R-129 | `REL-S6`, `MAIN-Should-7` | 暴露并接线可靠性指标/告警（claim_conflict/finalize_fail/push_error/recovery_count/dlq_depth）。 |
 | R-130 | `REL-S8` | 事件推送改为有界并发 + 单连接超时 + 限流。 |

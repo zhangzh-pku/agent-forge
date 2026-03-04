@@ -114,6 +114,7 @@ func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStor
 // --- TaskStore ---
 
 func (s *DynamoStore) ApplyCreateTransition(ctx context.Context, task *model.Task, run *model.Run) error {
+	run = ensureQueuedAt(run, time.Now().UTC())
 	if task == nil || run == nil || task.TaskID == "" || run.TaskID == "" || run.RunID == "" {
 		return ErrConflict
 	}
@@ -424,6 +425,7 @@ func (s *DynamoStore) SetActiveRun(ctx context.Context, taskID string, runID str
 }
 
 func (s *DynamoStore) ApplyResumeTransition(ctx context.Context, taskID string, run *model.Run, from []model.TaskStatus, to model.TaskStatus) error {
+	run = ensureQueuedAt(run, time.Now().UTC())
 	if run == nil || run.TaskID == "" || run.RunID == "" || run.TaskID != taskID {
 		return ErrConflict
 	}
@@ -635,6 +637,7 @@ func (s *DynamoStore) listTasksByTenantQuery(ctx context.Context, tenantID strin
 // --- RunStore ---
 
 func (s *DynamoStore) PutRun(ctx context.Context, run *model.Run) error {
+	run = ensureQueuedAt(run, time.Now().UTC())
 	if run == nil || run.TaskID == "" || run.RunID == "" {
 		return fmt.Errorf("state: put run: invalid run")
 	}
@@ -827,6 +830,7 @@ func (s *DynamoStore) AddRunUsage(ctx context.Context, taskID, runID string, usa
 }
 
 func (s *DynamoStore) ResetRunToQueued(ctx context.Context, taskID, runID string) error {
+	now := time.Now().UTC()
 	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.runsTable),
 		Key: map[string]dbtypes.AttributeValue{
@@ -834,12 +838,13 @@ func (s *DynamoStore) ResetRunToQueued(ctx context.Context, taskID, runID string
 			"sk": avString(runSK(runID)),
 		},
 		ConditionExpression: aws.String("attribute_exists(pk)"),
-		UpdateExpression:    aws.String("SET #status = :queued REMOVE started_at, ended_at"),
+		UpdateExpression:    aws.String("SET #status = :queued, queued_at = :queued_at REMOVE started_at, ended_at"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
 		},
 		ExpressionAttributeValues: map[string]dbtypes.AttributeValue{
-			":queued": avString(string(model.RunStatusQueued)),
+			":queued":    avString(string(model.RunStatusQueued)),
+			":queued_at": avTime(now),
 		},
 	})
 	if err != nil {
@@ -1599,6 +1604,9 @@ func applyRunCompatFields(item map[string]dbtypes.AttributeValue, run *model.Run
 	}
 	if run.ResumeFromStepIndex != nil {
 		item["resume_from_step_index"] = avInt(*run.ResumeFromStepIndex)
+	}
+	if run.QueuedAt != nil {
+		item["queued_at"] = avTime(*run.QueuedAt)
 	}
 	if run.StartedAt != nil {
 		item["started_at"] = avTime(*run.StartedAt)

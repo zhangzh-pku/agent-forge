@@ -66,6 +66,7 @@ type Run struct {
 	RunID               string       `json:"run_id"`
 	TenantID            string       `json:"tenant_id"`
 	Status              RunStatus    `json:"status"`
+	QueuedAt            *time.Time   `json:"queued_at,omitempty"`
 	ParentRunID         string       `json:"parent_run_id,omitempty"`
 	ResumeFromStepIndex *int         `json:"resume_from_step_index,omitempty"`
 	ModelConfig         *ModelConfig `json:"model_config,omitempty"`
