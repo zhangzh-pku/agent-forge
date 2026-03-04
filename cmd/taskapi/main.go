@@ -17,6 +17,7 @@ import (
 
 	appcfg "github.com/agentforge/agentforge/internal/config"
 	"github.com/agentforge/agentforge/internal/ops"
+	"github.com/agentforge/agentforge/internal/telemetry"
 	"github.com/agentforge/agentforge/pkg/api"
 	artstore "github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/engine"
@@ -43,6 +44,22 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	telemetryCfg, err := appcfg.LoadTelemetryRuntimeConfigFromEnv("agentforge-taskapi")
+	if err != nil {
+		log.Fatalf("failed to load telemetry config: %v", err)
+	}
+	shutdownTelemetry, err := telemetry.Init(context.Background(), telemetryCfg)
+	if err != nil {
+		log.Fatalf("failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			log.Printf("telemetry shutdown error: %v", err)
+		}
+	}()
 
 	store, artifacts, q, pusher, embeddedWorker, mode, err := initRuntime(context.Background())
 	if err != nil {

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	appcfg "github.com/agentforge/agentforge/internal/config"
+	"github.com/agentforge/agentforge/internal/telemetry"
 	"github.com/agentforge/agentforge/pkg/state"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -45,6 +47,22 @@ func handler(ctx context.Context, store state.ConnectionStore, event APIGatewayW
 }
 
 func main() {
+	telemetryCfg, err := appcfg.LoadTelemetryRuntimeConfigFromEnv("agentforge-ws-disconnect")
+	if err != nil {
+		log.Fatalf("failed to load telemetry config: %v", err)
+	}
+	shutdownTelemetry, err := telemetry.Init(context.Background(), telemetryCfg)
+	if err != nil {
+		log.Fatalf("failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			log.Printf("telemetry shutdown error: %v", err)
+		}
+	}()
+
 	store, err := initStore(context.Background())
 	if err != nil {
 		log.Fatal(err)

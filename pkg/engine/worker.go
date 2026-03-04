@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentforge/agentforge/internal/telemetry"
 	"github.com/agentforge/agentforge/internal/util"
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/model"
@@ -14,6 +15,9 @@ import (
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/workspace"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Worker consumes messages from the queue and executes tasks.
@@ -56,7 +60,19 @@ func (w *Worker) Start(ctx context.Context) error {
 }
 
 func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error {
-	log := w.log.With("task_id", msg.TaskID).With("run_id", msg.RunID).With("tenant_id", msg.TenantID).With("trace_id", util.NewID("tr_"))
+	ctx, span := otel.Tracer("agentforge/worker").Start(ctx, "worker.handle_message")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("agentforge.task_id", msg.TaskID),
+		attribute.String("agentforge.run_id", msg.RunID),
+		attribute.String("agentforge.tenant_id", msg.TenantID),
+	)
+
+	traceID := telemetry.TraceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = util.NewID("tr_")
+	}
+	log := w.log.With("task_id", msg.TaskID).With("run_id", msg.RunID).With("tenant_id", msg.TenantID).With("trace_id", traceID)
 	log.Info("worker: received message")
 
 	// Step 1: Claim the run (idempotent).
@@ -69,6 +85,8 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 			return nil // Ack — don't reprocess.
 		}
 		// Unexpected DB error — return error so the message is retried.
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "claim run failed")
 		return fmt.Errorf("worker: claim run: %w", err)
 	}
 
@@ -86,6 +104,8 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
 			log.Error("worker: failed to complete run after status update failure", map[string]interface{}{"error": completeErr.Error()})
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update task status failed")
 		return fmt.Errorf("worker: update task status to RUNNING: %w", err)
 	}
 
@@ -95,6 +115,8 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		if completeErr := w.store.CompleteRun(ctx, msg.TaskID, msg.RunID, model.RunStatusFailed); completeErr != nil {
 			log.Error("worker: failed to complete run after task load failure", map[string]interface{}{"error": completeErr.Error()})
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get task failed")
 		return fmt.Errorf("worker: get task: %w", err)
 	}
 	if task.TenantID != msg.TenantID {
@@ -118,6 +140,8 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		if updateErr := w.store.UpdateTaskStatusForRun(ctx, msg.TaskID, msg.RunID, []model.TaskStatus{model.TaskStatusRunning}, model.TaskStatusFailed); updateErr != nil {
 			log.Error("worker: failed to update task status after run load failure", map[string]interface{}{"error": updateErr.Error()})
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get run failed")
 		return fmt.Errorf("worker: get run: %w", err)
 	}
 
@@ -125,6 +149,8 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 	wsCfg := workspace.DefaultConfig(msg.RunID)
 	ws, err := workspace.NewLocalManager(wsCfg)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "create workspace failed")
 		return fmt.Errorf("worker: create workspace: %w", err)
 	}
 	defer func() {
@@ -158,8 +184,11 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		log.Error("worker: engine error", map[string]interface{}{"error": err.Error()})
 		if finalizeErr := w.finalizeRun(msg.TaskID, msg.RunID, model.RunStatusFailed); finalizeErr != nil {
 			log.Error("worker: failed to persist FAILED terminal state after engine error", map[string]interface{}{"error": finalizeErr.Error()})
+			span.RecordError(finalizeErr)
+			span.SetStatus(codes.Error, "persist failed terminal state failed")
 			return finalizeErr
 		}
+		span.SetStatus(codes.Error, "engine execution failed")
 		return nil // Ack — don't retry engine failures.
 	}
 
@@ -170,6 +199,8 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 			"error":  finalizeErr.Error(),
 			"status": string(result.Status),
 		})
+		span.RecordError(finalizeErr)
+		span.SetStatus(codes.Error, "persist terminal state failed")
 		return finalizeErr
 	}
 
@@ -177,6 +208,7 @@ func (w *Worker) handleMessage(ctx context.Context, msg *model.SQSMessage) error
 		"status":    string(result.Status),
 		"last_step": result.LastStep,
 	})
+	span.SetAttributes(attribute.String("agentforge.run_status", string(result.Status)))
 
 	return nil
 }

@@ -7,9 +7,11 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
+	"time"
 
 	appcfg "github.com/agentforge/agentforge/internal/config"
 	"github.com/agentforge/agentforge/internal/ops"
+	"github.com/agentforge/agentforge/internal/telemetry"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
@@ -20,6 +22,22 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	telemetryCfg, err := appcfg.LoadTelemetryRuntimeConfigFromEnv("agentforge-recovery")
+	if err != nil {
+		log.Fatalf("failed to load telemetry config: %v", err)
+	}
+	shutdownTelemetry, err := telemetry.Init(context.Background(), telemetryCfg)
+	if err != nil {
+		log.Fatalf("failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			log.Printf("telemetry shutdown error: %v", err)
+		}
+	}()
 
 	store, q, mode, err := initRuntime(ctx)
 	if err != nil {

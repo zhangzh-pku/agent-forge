@@ -10,6 +10,11 @@ import (
 	"time"
 
 	"github.com/agentforge/agentforge/internal/util"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // TenantInfo holds authentication context extracted from the request.
@@ -48,6 +53,10 @@ func GetTenant(ctx context.Context) *TenantInfo {
 //   - default: trusted in aws runtime, header otherwise.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		spanCtx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		spanCtx, span := otel.Tracer("agentforge/api").Start(spanCtx, "http.request", trace.WithSpanKind(trace.SpanKindServer))
+		defer span.End()
+
 		startedAt := time.Now().UTC()
 		lrw := &loggingResponseWriter{ResponseWriter: w}
 
@@ -58,23 +67,43 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		}
 		lrw.Header().Set("X-Request-Id", requestID)
 		tenantID, userID := extractIdentityFromRequest(r, authMode)
+		span.SetAttributes(
+			attribute.String("http.method", r.Method),
+			attribute.String("http.target", r.URL.Path),
+			attribute.String("agentforge.request_id", requestID),
+			attribute.String("agentforge.auth_mode", authMode),
+			attribute.String("agentforge.tenant_id", tenantID),
+			attribute.String("agentforge.user_id", userID),
+		)
 		if tenantID == "" {
 			http.Error(lrw, `{"error":"missing authenticated tenant identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
 			logRequest(r, lrw, startedAt, requestID, tenantID, userID)
+			span.SetStatus(codes.Error, "missing authenticated tenant identity")
+			span.SetAttributes(attribute.Int("http.status_code", http.StatusUnauthorized))
 			return
 		}
 		if userID == "" {
 			http.Error(lrw, `{"error":"missing authenticated user identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
 			logRequest(r, lrw, startedAt, requestID, tenantID, userID)
+			span.SetStatus(codes.Error, "missing authenticated user identity")
+			span.SetAttributes(attribute.Int("http.status_code", http.StatusUnauthorized))
 			return
 		}
-		ctx := context.WithValue(r.Context(), tenantContextKey{}, &TenantInfo{
+		ctx := context.WithValue(spanCtx, tenantContextKey{}, &TenantInfo{
 			TenantID:  tenantID,
 			UserID:    userID,
 			RequestID: requestID,
 		})
 		next.ServeHTTP(lrw, r.WithContext(ctx))
 		logRequest(r, lrw, startedAt, requestID, tenantID, userID)
+		status := lrw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		span.SetAttributes(attribute.Int("http.status_code", status))
+		if status >= http.StatusInternalServerError {
+			span.SetStatus(codes.Error, "server error")
+		}
 	})
 }
 

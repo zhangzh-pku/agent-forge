@@ -145,3 +145,60 @@ func TestLoadRecoveryRuntimeConfigFromEnvInvalidRepairWithoutCheck(t *testing.T)
 		t.Fatal("expected error when repair is enabled without check")
 	}
 }
+
+func TestLoadTelemetryRuntimeConfigFromEnvDefaults(t *testing.T) {
+	cfg, err := LoadTelemetryRuntimeConfigFromEnv("agentforge-taskapi")
+	if err != nil {
+		t.Fatalf("LoadTelemetryRuntimeConfigFromEnv error: %v", err)
+	}
+	if cfg.Enabled {
+		t.Fatal("expected telemetry disabled by default")
+	}
+	if cfg.ServiceName != "agentforge-taskapi" {
+		t.Fatalf("unexpected service name: %s", cfg.ServiceName)
+	}
+	if cfg.Exporter != DefaultOTelExporter {
+		t.Fatalf("unexpected exporter: %s", cfg.Exporter)
+	}
+	if cfg.SampleRatio != DefaultOTelSampleRatio {
+		t.Fatalf("unexpected sample ratio: %v", cfg.SampleRatio)
+	}
+}
+
+func TestLoadTelemetryRuntimeConfigFromEnvCustom(t *testing.T) {
+	t.Setenv("AGENTFORGE_OTEL_ENABLED", "true")
+	t.Setenv("AGENTFORGE_OTEL_SERVICE_NAME", "agentforge-worker")
+	t.Setenv("AGENTFORGE_OTEL_EXPORTER", "stdout")
+	t.Setenv("AGENTFORGE_OTEL_SAMPLE_RATIO", "0.25")
+
+	cfg, err := LoadTelemetryRuntimeConfigFromEnv("fallback")
+	if err != nil {
+		t.Fatalf("LoadTelemetryRuntimeConfigFromEnv error: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("expected telemetry enabled")
+	}
+	if cfg.ServiceName != "agentforge-worker" {
+		t.Fatalf("unexpected service name: %s", cfg.ServiceName)
+	}
+	if cfg.Exporter != "stdout" {
+		t.Fatalf("unexpected exporter: %s", cfg.Exporter)
+	}
+	if cfg.SampleRatio != 0.25 {
+		t.Fatalf("unexpected sample ratio: %v", cfg.SampleRatio)
+	}
+}
+
+func TestLoadTelemetryRuntimeConfigFromEnvRejectsInvalidExporter(t *testing.T) {
+	t.Setenv("AGENTFORGE_OTEL_EXPORTER", "invalid")
+	if _, err := LoadTelemetryRuntimeConfigFromEnv("agentforge"); err == nil {
+		t.Fatal("expected invalid exporter error")
+	}
+}
+
+func TestLoadTelemetryRuntimeConfigFromEnvRejectsInvalidSampleRatio(t *testing.T) {
+	t.Setenv("AGENTFORGE_OTEL_SAMPLE_RATIO", "1.5")
+	if _, err := LoadTelemetryRuntimeConfigFromEnv("agentforge"); err == nil {
+		t.Fatal("expected invalid sample ratio error")
+	}
+}

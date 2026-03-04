@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	appcfg "github.com/agentforge/agentforge/internal/config"
+	"github.com/agentforge/agentforge/internal/telemetry"
 	artstore "github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/engine"
 	"github.com/agentforge/agentforge/pkg/queue"
@@ -26,6 +28,22 @@ import (
 )
 
 func main() {
+	telemetryCfg, err := appcfg.LoadTelemetryRuntimeConfigFromEnv("agentforge-worker")
+	if err != nil {
+		log.Fatalf("failed to load telemetry config: %v", err)
+	}
+	shutdownTelemetry, err := telemetry.Init(context.Background(), telemetryCfg)
+	if err != nil {
+		log.Fatalf("failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			log.Printf("telemetry shutdown error: %v", err)
+		}
+	}()
+
 	store, artifacts, q, pusher, mode, err := initRuntime(context.Background())
 	if err != nil {
 		log.Fatalf("failed to initialize runtime dependencies: %v", err)

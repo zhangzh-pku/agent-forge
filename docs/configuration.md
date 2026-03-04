@@ -25,6 +25,10 @@ This document is the canonical environment-variable reference for AgentForge.
 | `OPENAI_API_KEY_SECRET_ARN` | _(empty)_ | Optional Secrets Manager secret ARN used to resolve OpenAI API key at startup. |
 | `OPENAI_API_KEY_SECRET_FIELD` | _(empty)_ | Optional JSON field name in the secret payload when secret value is a JSON object. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL. |
+| `AGENTFORGE_OTEL_ENABLED` | `false` | Enables OpenTelemetry tracing initialization in app entrypoints. |
+| `AGENTFORGE_OTEL_SERVICE_NAME` | entrypoint default | Overrides OTel `service.name` resource attribute. |
+| `AGENTFORGE_OTEL_EXPORTER` | `none` | OTel exporter mode: `none` or `stdout`. |
+| `AGENTFORGE_OTEL_SAMPLE_RATIO` | `1.0` | Trace sampling ratio in `[0,1]` for OTel tracer provider. |
 
 ## Recovery Scheduler Variables
 

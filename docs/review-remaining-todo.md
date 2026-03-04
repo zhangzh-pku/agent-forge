@@ -18,7 +18,6 @@
 
 | ID | Source | TODO |
 |---|---|---|
-| R-123 | `CC-O2`, `CC-N13` | 接入 OTel/X-Ray 追踪（应用与 Terraform）。 |
 
 ## P2 - 测试、发布与工程化补齐
 

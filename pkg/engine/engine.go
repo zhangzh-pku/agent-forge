@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentforge/agentforge/internal/telemetry"
 	"github.com/agentforge/agentforge/internal/util"
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/memory"
@@ -19,6 +20,9 @@ import (
 	"github.com/agentforge/agentforge/pkg/state"
 	"github.com/agentforge/agentforge/pkg/stream"
 	"github.com/agentforge/agentforge/pkg/workspace"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Config holds engine configuration.
@@ -108,8 +112,39 @@ type externalizedStepField struct {
 }
 
 // Execute runs the ReAct loop for a given task and run.
-func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, ws workspace.Manager) (*RunResult, error) {
-	log := e.log.With("task_id", task.TaskID).With("run_id", run.RunID).With("tenant_id", task.TenantID).With("trace_id", util.NewID("tr_"))
+func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, ws workspace.Manager) (res *RunResult, retErr error) {
+	ctx, span := otel.Tracer("agentforge/engine").Start(ctx, "engine.execute")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("agentforge.task_id", task.TaskID),
+		attribute.String("agentforge.run_id", run.RunID),
+		attribute.String("agentforge.tenant_id", task.TenantID),
+	)
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+			span.SetStatus(codes.Error, retErr.Error())
+			return
+		}
+		if res == nil {
+			return
+		}
+		span.SetAttributes(
+			attribute.String("agentforge.run_status", string(res.Status)),
+			attribute.Int("agentforge.last_step", res.LastStep),
+			attribute.Int("agentforge.total_tokens", res.TotalTokens),
+			attribute.Float64("agentforge.total_cost_usd", res.TotalCostUSD),
+		)
+		if res.Status == model.RunStatusFailed {
+			span.SetStatus(codes.Error, res.ErrorMessage)
+		}
+	}()
+
+	traceID := telemetry.TraceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = util.NewID("tr_")
+	}
+	log := e.log.With("task_id", task.TaskID).With("run_id", run.RunID).With("tenant_id", task.TenantID).With("trace_id", traceID)
 
 	log.Info("engine: starting execution")
 	e.metrics.TaskStarted()

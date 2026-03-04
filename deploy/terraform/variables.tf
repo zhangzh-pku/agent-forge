@@ -178,3 +178,31 @@ variable "recovery_alarm_actions" {
   type        = list(string)
   default     = []
 }
+
+variable "otel_enabled" {
+  description = "Enable application-side OpenTelemetry spans in Lambda entrypoints."
+  type        = bool
+  default     = true
+}
+
+variable "otel_exporter" {
+  description = "OpenTelemetry exporter mode for app spans: none or stdout."
+  type        = string
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "stdout"], var.otel_exporter)
+    error_message = "otel_exporter must be one of: none, stdout."
+  }
+}
+
+variable "otel_sample_ratio" {
+  description = "OpenTelemetry sampling ratio in [0,1]."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.otel_sample_ratio >= 0 && var.otel_sample_ratio <= 1
+    error_message = "otel_sample_ratio must be between 0 and 1."
+  }
+}

@@ -10,14 +10,16 @@ import (
 )
 
 const (
-	DefaultConnectionsTaskIndex         = "task-index"
-	DefaultSQSWaitTimeSeconds     int32 = 20
-	DefaultSQSVisibilityTimeout   int32 = 300
-	DefaultSQSMaxMessages         int32 = 10
-	DefaultRecoveryLimit          int32 = 200
-	DefaultArtifactPresignExpires       = 15 * time.Minute
-	DefaultRecoveryStaleFor             = 10 * time.Minute
-	DefaultEventRetention               = 24 * time.Hour
+	DefaultConnectionsTaskIndex           = "task-index"
+	DefaultSQSWaitTimeSeconds     int32   = 20
+	DefaultSQSVisibilityTimeout   int32   = 300
+	DefaultSQSMaxMessages         int32   = 10
+	DefaultRecoveryLimit          int32   = 200
+	DefaultArtifactPresignExpires         = 15 * time.Minute
+	DefaultRecoveryStaleFor               = 10 * time.Minute
+	DefaultEventRetention                 = 24 * time.Hour
+	DefaultOTelExporter                   = "none"
+	DefaultOTelSampleRatio        float64 = 1.0
 )
 
 // RuntimeMode controls which backend implementations the app should use.
@@ -78,6 +80,14 @@ type RecoveryRuntimeConfig struct {
 	TenantID          string
 	ConsistencyCheck  bool
 	ConsistencyRepair bool
+}
+
+// TelemetryRuntimeConfig controls OpenTelemetry runtime behavior.
+type TelemetryRuntimeConfig struct {
+	Enabled     bool
+	ServiceName string
+	Exporter    string
+	SampleRatio float64
 }
 
 // LoadAWSStateConfigFromEnv loads DynamoDB table/index config for aws mode.
@@ -218,6 +228,48 @@ func LoadRecoveryRuntimeConfigFromEnv() (*RecoveryRuntimeConfig, error) {
 		TenantID:          String("AGENTFORGE_RECOVERY_TENANT_ID", ""),
 		ConsistencyCheck:  check,
 		ConsistencyRepair: repair,
+	}, nil
+}
+
+// LoadTelemetryRuntimeConfigFromEnv loads OpenTelemetry settings.
+func LoadTelemetryRuntimeConfigFromEnv(defaultServiceName string) (*TelemetryRuntimeConfig, error) {
+	enabled, err := Bool("AGENTFORGE_OTEL_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+
+	serviceName := strings.TrimSpace(String("AGENTFORGE_OTEL_SERVICE_NAME", defaultServiceName))
+	if serviceName == "" {
+		serviceName = "agentforge"
+	}
+
+	exporter := strings.ToLower(strings.TrimSpace(String("AGENTFORGE_OTEL_EXPORTER", DefaultOTelExporter)))
+	switch exporter {
+	case "":
+		exporter = DefaultOTelExporter
+	case "none", "stdout":
+	default:
+		return nil, fmt.Errorf("invalid AGENTFORGE_OTEL_EXPORTER: %q (expected one of: none, stdout)", exporter)
+	}
+
+	sampleRatio := DefaultOTelSampleRatio
+	rawSampleRatio := strings.TrimSpace(os.Getenv("AGENTFORGE_OTEL_SAMPLE_RATIO"))
+	if rawSampleRatio != "" {
+		parsed, err := strconv.ParseFloat(rawSampleRatio, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid AGENTFORGE_OTEL_SAMPLE_RATIO: %w", err)
+		}
+		if parsed < 0 || parsed > 1 {
+			return nil, fmt.Errorf("invalid AGENTFORGE_OTEL_SAMPLE_RATIO: must be between 0 and 1")
+		}
+		sampleRatio = parsed
+	}
+
+	return &TelemetryRuntimeConfig{
+		Enabled:     enabled,
+		ServiceName: serviceName,
+		Exporter:    exporter,
+		SampleRatio: sampleRatio,
 	}, nil
 }
 

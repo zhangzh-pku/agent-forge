@@ -760,17 +760,21 @@ resource "aws_lambda_function" "task_api" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME          = "aws"
-      ENVIRONMENT                 = var.environment
-      TASKS_TABLE                 = aws_dynamodb_table.tasks.name
-      RUNS_TABLE                  = aws_dynamodb_table.runs.name
-      STEPS_TABLE                 = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE           = aws_dynamodb_table.connections.name
-      TASK_QUEUE_URL              = aws_sqs_queue.tasks.url
-      ARTIFACTS_BUCKET            = aws_s3_bucket.artifacts.id
-      ARTIFACT_SSE_KMS_KEY_ARN    = var.kms_key_arn
-      OPENAI_API_KEY_SECRET_ARN   = var.openai_api_key_secret_arn
-      OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
+      AGENTFORGE_RUNTIME           = "aws"
+      ENVIRONMENT                  = var.environment
+      TASKS_TABLE                  = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                   = aws_dynamodb_table.runs.name
+      STEPS_TABLE                  = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE            = aws_dynamodb_table.connections.name
+      TASK_QUEUE_URL               = aws_sqs_queue.tasks.url
+      ARTIFACTS_BUCKET             = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN     = var.kms_key_arn
+      OPENAI_API_KEY_SECRET_ARN    = var.openai_api_key_secret_arn
+      OPENAI_API_KEY_SECRET_FIELD  = var.openai_api_key_secret_field
+      AGENTFORGE_OTEL_ENABLED      = tostring(var.otel_enabled)
+      AGENTFORGE_OTEL_SERVICE_NAME = "agentforge-taskapi"
+      AGENTFORGE_OTEL_EXPORTER     = var.otel_exporter
+      AGENTFORGE_OTEL_SAMPLE_RATIO = tostring(var.otel_sample_ratio)
     }
   }
 
@@ -814,18 +818,22 @@ resource "aws_lambda_function" "worker" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME          = "aws"
-      ENVIRONMENT                 = var.environment
-      TASKS_TABLE                 = aws_dynamodb_table.tasks.name
-      RUNS_TABLE                  = aws_dynamodb_table.runs.name
-      STEPS_TABLE                 = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE           = aws_dynamodb_table.connections.name
-      TASK_QUEUE_URL              = aws_sqs_queue.tasks.url
-      ARTIFACTS_BUCKET            = aws_s3_bucket.artifacts.id
-      ARTIFACT_SSE_KMS_KEY_ARN    = var.kms_key_arn
-      WEBSOCKET_ENDPOINT          = aws_apigatewayv2_stage.websocket.invoke_url
-      OPENAI_API_KEY_SECRET_ARN   = var.openai_api_key_secret_arn
-      OPENAI_API_KEY_SECRET_FIELD = var.openai_api_key_secret_field
+      AGENTFORGE_RUNTIME           = "aws"
+      ENVIRONMENT                  = var.environment
+      TASKS_TABLE                  = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                   = aws_dynamodb_table.runs.name
+      STEPS_TABLE                  = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE            = aws_dynamodb_table.connections.name
+      TASK_QUEUE_URL               = aws_sqs_queue.tasks.url
+      ARTIFACTS_BUCKET             = aws_s3_bucket.artifacts.id
+      ARTIFACT_SSE_KMS_KEY_ARN     = var.kms_key_arn
+      WEBSOCKET_ENDPOINT           = aws_apigatewayv2_stage.websocket.invoke_url
+      OPENAI_API_KEY_SECRET_ARN    = var.openai_api_key_secret_arn
+      OPENAI_API_KEY_SECRET_FIELD  = var.openai_api_key_secret_field
+      AGENTFORGE_OTEL_ENABLED      = tostring(var.otel_enabled)
+      AGENTFORGE_OTEL_SERVICE_NAME = "agentforge-worker"
+      AGENTFORGE_OTEL_EXPORTER     = var.otel_exporter
+      AGENTFORGE_OTEL_SAMPLE_RATIO = tostring(var.otel_sample_ratio)
     }
   }
 
@@ -882,6 +890,10 @@ resource "aws_lambda_function" "recovery" {
       AGENTFORGE_RECOVERY_TENANT_ID          = var.recovery_tenant_id
       AGENTFORGE_RECOVERY_CONSISTENCY_CHECK  = tostring(var.recovery_consistency_check)
       AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR = tostring(var.recovery_consistency_repair)
+      AGENTFORGE_OTEL_ENABLED                = tostring(var.otel_enabled)
+      AGENTFORGE_OTEL_SERVICE_NAME           = "agentforge-recovery"
+      AGENTFORGE_OTEL_EXPORTER               = var.otel_exporter
+      AGENTFORGE_OTEL_SAMPLE_RATIO           = tostring(var.otel_sample_ratio)
     }
   }
 
@@ -923,12 +935,16 @@ resource "aws_lambda_function" "ws_connect" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME = "aws"
-      ENVIRONMENT        = var.environment
-      TASKS_TABLE        = aws_dynamodb_table.tasks.name
-      RUNS_TABLE         = aws_dynamodb_table.runs.name
-      STEPS_TABLE        = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
+      AGENTFORGE_RUNTIME           = "aws"
+      ENVIRONMENT                  = var.environment
+      TASKS_TABLE                  = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                   = aws_dynamodb_table.runs.name
+      STEPS_TABLE                  = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE            = aws_dynamodb_table.connections.name
+      AGENTFORGE_OTEL_ENABLED      = tostring(var.otel_enabled)
+      AGENTFORGE_OTEL_SERVICE_NAME = "agentforge-ws-connect"
+      AGENTFORGE_OTEL_EXPORTER     = var.otel_exporter
+      AGENTFORGE_OTEL_SAMPLE_RATIO = tostring(var.otel_sample_ratio)
     }
   }
 
@@ -970,12 +986,16 @@ resource "aws_lambda_function" "ws_disconnect" {
 
   environment {
     variables = {
-      AGENTFORGE_RUNTIME = "aws"
-      ENVIRONMENT        = var.environment
-      TASKS_TABLE        = aws_dynamodb_table.tasks.name
-      RUNS_TABLE         = aws_dynamodb_table.runs.name
-      STEPS_TABLE        = aws_dynamodb_table.steps.name
-      CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
+      AGENTFORGE_RUNTIME           = "aws"
+      ENVIRONMENT                  = var.environment
+      TASKS_TABLE                  = aws_dynamodb_table.tasks.name
+      RUNS_TABLE                   = aws_dynamodb_table.runs.name
+      STEPS_TABLE                  = aws_dynamodb_table.steps.name
+      CONNECTIONS_TABLE            = aws_dynamodb_table.connections.name
+      AGENTFORGE_OTEL_ENABLED      = tostring(var.otel_enabled)
+      AGENTFORGE_OTEL_SERVICE_NAME = "agentforge-ws-disconnect"
+      AGENTFORGE_OTEL_EXPORTER     = var.otel_exporter
+      AGENTFORGE_OTEL_SAMPLE_RATIO = tostring(var.otel_sample_ratio)
     }
   }
 

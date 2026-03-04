@@ -82,6 +82,14 @@ and grants `secretsmanager:GetSecretValue` / `DescribeSecret` to task_api + work
 - `http_jwt_authorizer_enabled=true` enables JWT authorizer on HTTP API.
 - `websocket_authorizer_enabled=true` enables REQUEST authorizer on WebSocket `$connect`.
 
+## Tracing Toggles
+
+- Lambda `tracing_config` is enabled (`mode = "Active"`), which activates AWS X-Ray tracing at the platform layer.
+- Application-side OpenTelemetry spans are controlled by:
+  - `otel_enabled` (default `true`)
+  - `otel_exporter` (`none` | `stdout`, default `none`)
+  - `otel_sample_ratio` (default `1.0`)
+
 ## CI Checks
 
 Terraform checks run in `.github/workflows/terraform.yml`:
