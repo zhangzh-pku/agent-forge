@@ -71,38 +71,7 @@ func main() {
 	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) {
 		probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-
-		checks := map[string]string{
-			"state": "ok",
-			"queue": "ok",
-		}
-		errorsByCheck := map[string]string{}
-		statusCode := http.StatusOK
-
-		if checker, ok := store.(readinessChecker); ok {
-			if err := checker.HealthCheck(probeCtx); err != nil {
-				checks["state"] = "error"
-				errorsByCheck["state"] = err.Error()
-				statusCode = http.StatusServiceUnavailable
-			}
-		}
-
-		if checker, ok := q.(readinessChecker); ok {
-			if err := checker.HealthCheck(probeCtx); err != nil {
-				checks["queue"] = "error"
-				errorsByCheck["queue"] = err.Error()
-				statusCode = http.StatusServiceUnavailable
-			}
-		}
-
-		resp := map[string]interface{}{
-			"status": "ready",
-			"checks": checks,
-		}
-		if statusCode != http.StatusOK {
-			resp["status"] = "not_ready"
-			resp["errors"] = errorsByCheck
-		}
+		statusCode, resp := buildReadinessResponse(probeCtx, store, q)
 		writeJSON(w, statusCode, resp)
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
@@ -248,6 +217,41 @@ func writePrometheusMetrics(w http.ResponseWriter, snap api.RequestMetricsSnapsh
 	_, _ = fmt.Fprintf(w, "# HELP agentforge_http_5xx_total Total HTTP 5xx responses.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE agentforge_http_5xx_total counter\n")
 	_, _ = fmt.Fprintf(w, "agentforge_http_5xx_total %d\n", snap.Errors5xxTotal)
+}
+
+func buildReadinessResponse(ctx context.Context, store any, q any) (int, map[string]interface{}) {
+	checks := map[string]string{
+		"state": "ok",
+		"queue": "ok",
+	}
+	errorsByCheck := map[string]string{}
+	statusCode := http.StatusOK
+
+	if checker, ok := store.(readinessChecker); ok {
+		if err := checker.HealthCheck(ctx); err != nil {
+			checks["state"] = "error"
+			errorsByCheck["state"] = err.Error()
+			statusCode = http.StatusServiceUnavailable
+		}
+	}
+
+	if checker, ok := q.(readinessChecker); ok {
+		if err := checker.HealthCheck(ctx); err != nil {
+			checks["queue"] = "error"
+			errorsByCheck["queue"] = err.Error()
+			statusCode = http.StatusServiceUnavailable
+		}
+	}
+
+	resp := map[string]interface{}{
+		"status": "ready",
+		"checks": checks,
+	}
+	if statusCode != http.StatusOK {
+		resp["status"] = "not_ready"
+		resp["errors"] = errorsByCheck
+	}
+	return statusCode, resp
 }
 
 func initRuntime(ctx context.Context) (state.Store, artstore.Store, queue.Queue, stream.Pusher, bool, string, error) {
