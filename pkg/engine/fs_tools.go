@@ -314,40 +314,49 @@ func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, e
 	if len(params.Paths) == 0 {
 		return &ToolResult{Error: "paths required"}, nil
 	}
-
-	pr, pw := io.Pipe()
-	go func() {
-		gw := gzip.NewWriter(pw)
-		tw := tar.NewWriter(gw)
-		var writeErr error
-		for _, p := range params.Paths {
-			data, err := t.ws.Read(ctx, p)
-			if err != nil {
-				writeErr = fmt.Errorf("read %s: %w", p, err)
-				break
-			}
-			hdr := &tar.Header{
-				Name: p,
-				Mode: 0o644,
-				Size: int64(len(data)),
-			}
-			if err := tw.WriteHeader(hdr); err != nil {
-				writeErr = err
-				break
-			}
-			if _, err := tw.Write(data); err != nil {
-				writeErr = err
-				break
-			}
-		}
-		if closeErr := tw.Close(); writeErr == nil && closeErr != nil {
-			writeErr = closeErr
-		}
-		if closeErr := gw.Close(); writeErr == nil && closeErr != nil {
-			writeErr = closeErr
-		}
-		pw.CloseWithError(writeErr)
+	tmpFile, err := os.CreateTemp("", "agentforge-export-*.tar.gz")
+	if err != nil {
+		return &ToolResult{Error: fmt.Sprintf("failed to create temp export file: %v", err)}, nil
+	}
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
 	}()
+
+	gw := gzip.NewWriter(tmpFile)
+	tw := tar.NewWriter(gw)
+	for _, p := range params.Paths {
+		select {
+		case <-ctx.Done():
+			return &ToolResult{Error: fmt.Sprintf("export cancelled: %v", ctx.Err())}, nil
+		default:
+		}
+
+		data, readErr := t.ws.Read(ctx, p)
+		if readErr != nil {
+			return &ToolResult{Error: fmt.Sprintf("export failed: read %s: %v", p, readErr)}, nil
+		}
+		hdr := &tar.Header{
+			Name: p,
+			Mode: 0o644,
+			Size: int64(len(data)),
+		}
+		if writeErr := tw.WriteHeader(hdr); writeErr != nil {
+			return &ToolResult{Error: fmt.Sprintf("export failed: %v", writeErr)}, nil
+		}
+		if _, writeErr := tw.Write(data); writeErr != nil {
+			return &ToolResult{Error: fmt.Sprintf("export failed: %v", writeErr)}, nil
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return &ToolResult{Error: fmt.Sprintf("export failed: %v", err)}, nil
+	}
+	if err := gw.Close(); err != nil {
+		return &ToolResult{Error: fmt.Sprintf("export failed: %v", err)}, nil
+	}
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		return &ToolResult{Error: fmt.Sprintf("export failed: %v", err)}, nil
+	}
 
 	rnd, err := randomHex()
 	if err != nil {
@@ -358,7 +367,7 @@ func (t *fsExportTool) Execute(ctx context.Context, args string) (*ToolResult, e
 		prefix = "exports"
 	}
 	key := fmt.Sprintf("%s/artifact_%s.tar.gz", prefix, rnd)
-	sha, size, err := t.artifacts.Put(ctx, key, pr)
+	sha, size, err := t.artifacts.Put(ctx, key, tmpFile)
 	if err != nil {
 		return &ToolResult{Error: fmt.Sprintf("export failed: %v", err)}, nil
 	}
