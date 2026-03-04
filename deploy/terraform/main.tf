@@ -624,6 +624,8 @@ resource "aws_lambda_function" "worker" {
   architectures = ["arm64"]
   timeout       = 900 # 15 min - matches SQS visibility timeout
   memory_size   = 1024
+  # Keep worker concurrency bounded to protect downstream LLM/provider quotas.
+  reserved_concurrent_executions = 20
 
   filename         = data.archive_file.lambda_placeholder.output_path
   source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
@@ -806,6 +808,138 @@ resource "aws_cloudwatch_metric_alarm" "recovery_lambda_errors" {
   dimensions = {
     FunctionName = aws_lambda_function.recovery.function_name
   }
+}
+
+# Worker Lambda error alarm
+resource "aws_cloudwatch_metric_alarm" "worker_lambda_errors" {
+  alarm_name          = "agentforge-worker-errors-${var.environment}"
+  alarm_description   = "Worker Lambda reported execution errors."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.recovery_alarm_actions
+  ok_actions          = var.recovery_alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.worker.function_name
+  }
+}
+
+# Task API Lambda error alarm
+resource "aws_cloudwatch_metric_alarm" "task_api_lambda_errors" {
+  alarm_name          = "agentforge-task-api-errors-${var.environment}"
+  alarm_description   = "Task API Lambda reported execution errors."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.recovery_alarm_actions
+  ok_actions          = var.recovery_alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.task_api.function_name
+  }
+}
+
+# DLQ backlog alarm
+resource "aws_cloudwatch_metric_alarm" "tasks_dlq_messages_visible" {
+  alarm_name          = "agentforge-tasks-dlq-visible-${var.environment}"
+  alarm_description   = "Task DLQ has visible messages."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.recovery_alarm_actions
+  ok_actions          = var.recovery_alarm_actions
+
+  dimensions = {
+    QueueName = aws_sqs_queue.tasks_dlq.name
+  }
+}
+
+# HTTP API 5xx alarm
+resource "aws_cloudwatch_metric_alarm" "http_api_5xx" {
+  alarm_name          = "agentforge-http-api-5xx-${var.environment}"
+  alarm_description   = "HTTP API reported 5xx responses."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "5xx"
+  namespace           = "AWS/ApiGateway"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.recovery_alarm_actions
+  ok_actions          = var.recovery_alarm_actions
+
+  dimensions = {
+    ApiId = aws_apigatewayv2_api.http.id
+    Stage = aws_apigatewayv2_stage.http.name
+  }
+}
+
+# WAF for HTTP API (regional)
+resource "aws_wafv2_web_acl" "http_api" {
+  count = var.waf_enabled ? 1 : 0
+
+  name  = "agentforge-http-waf-${var.environment}"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "agentforge-http-waf-common-rules"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "agentforge-http-waf"
+    sampled_requests_enabled   = true
+  }
+
+  tags = {
+    Name = "agentforge-http-waf"
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "http_api" {
+  count = var.waf_enabled ? 1 : 0
+
+  resource_arn = aws_apigatewayv2_stage.http.arn
+  web_acl_arn  = aws_wafv2_web_acl.http_api[0].arn
 }
 
 # =============================================================================

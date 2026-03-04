@@ -34,7 +34,7 @@ func NewLocalManager(cfg Config) (*LocalManager, error) {
 		return nil, fmt.Errorf("workspace: resolve root: %w", err)
 	}
 	cfg.Root = absRoot
-	if err := os.MkdirAll(cfg.Root, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.Root, 0o700); err != nil {
 		return nil, fmt.Errorf("workspace: create root: %w", err)
 	}
 	m := &LocalManager{cfg: cfg}
@@ -118,7 +118,7 @@ func (m *LocalManager) Write(_ context.Context, path string, content []byte) err
 		return ErrQuotaFiles
 	}
 
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return fmt.Errorf("workspace: mkdir: %w", err)
 	}
 	if err := os.WriteFile(abs, content, 0o644); err != nil {
@@ -277,7 +277,7 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 	if err := os.RemoveAll(m.cfg.Root); err != nil {
 		return fmt.Errorf("workspace: clear for restore: %w", err)
 	}
-	if err := os.MkdirAll(m.cfg.Root, 0o755); err != nil {
+	if err := os.MkdirAll(m.cfg.Root, 0o700); err != nil {
 		return fmt.Errorf("workspace: recreate root: %w", err)
 	}
 
@@ -317,32 +317,43 @@ func (m *LocalManager) Restore(_ context.Context, r io.Reader) error {
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o700); err != nil {
 				return fmt.Errorf("workspace: mkdir: %w", err)
 			}
 		case tar.TypeReg:
+			if header.Size < 0 {
+				return fmt.Errorf("workspace: invalid negative file size in tar header: %d", header.Size)
+			}
 			// Enforce quotas during extraction.
 			fileCount++
 			if fileCount > m.cfg.MaxFileCount {
 				return fmt.Errorf("%w: archive contains more than %d files", ErrQuotaFiles, m.cfg.MaxFileCount)
 			}
-			totalBytes += header.Size
-			if totalBytes > m.cfg.MaxTotalBytes {
+			if header.Size > m.cfg.MaxTotalBytes-totalBytes {
 				return fmt.Errorf("%w: archive exceeds %d bytes", ErrQuotaBytes, m.cfg.MaxTotalBytes)
 			}
+			totalBytes += header.Size
 
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			fileMode := os.FileMode(header.Mode) & 0o644
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode)
 			if err != nil {
 				return fmt.Errorf("workspace: create file: %w", err)
 			}
-			if _, err := io.Copy(f, tr); err != nil {
+			written, err := io.Copy(f, io.LimitReader(tr, header.Size+1))
+			if err != nil {
 				if closeErr := f.Close(); closeErr != nil {
 					return fmt.Errorf("workspace: extract file: %w (close: %v)", err, closeErr)
 				}
 				return fmt.Errorf("workspace: extract file: %w", err)
+			}
+			if written != header.Size {
+				if closeErr := f.Close(); closeErr != nil {
+					return fmt.Errorf("workspace: extract file size mismatch (%d != %d) (close: %v)", written, header.Size, closeErr)
+				}
+				return fmt.Errorf("workspace: extract file size mismatch (%d != %d)", written, header.Size)
 			}
 			if err := f.Close(); err != nil {
 				return fmt.Errorf("workspace: close file: %w", err)

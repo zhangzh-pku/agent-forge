@@ -47,6 +47,24 @@ func TestWriteReadDelete(t *testing.T) {
 	}
 }
 
+func TestNewLocalManagerCreatesPrivateRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace-root")
+	cfg := Config{Root: root, MaxTotalBytes: 1024 * 1024, MaxFileCount: 100}
+	m, err := NewLocalManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Cleanup() })
+
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected root mode 0700, got %04o", got)
+	}
+}
+
 func TestPathTraversal(t *testing.T) {
 	m := newTestWorkspace(t)
 	ctx := context.Background()
@@ -276,6 +294,45 @@ func TestRestoreSkipsSymlinks(t *testing.T) {
 	_, err = m.Read(ctx, "evil_link")
 	if err == nil {
 		t.Fatal("symlink should not have been extracted")
+	}
+}
+
+func TestRestoreMasksFilePermissions(t *testing.T) {
+	m := newTestWorkspace(t)
+	ctx := context.Background()
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	content := []byte("secret")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "private.txt",
+		Mode: 0o777,
+		Size: int64(len(content)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(m.Root(), "private.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("expected restored file mode 0644, got %04o", got)
 	}
 }
 

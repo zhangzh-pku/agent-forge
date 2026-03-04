@@ -31,6 +31,12 @@ variable "http_allowed_origins" {
   default     = ["http://localhost:3000"]
 }
 
+variable "waf_enabled" {
+  description = "Enable WAF for the HTTP API stage."
+  type        = bool
+  default     = true
+}
+
 variable "recovery_enabled" {
   description = "Enable EventBridge scheduled stale-run recovery Lambda."
   type        = bool
