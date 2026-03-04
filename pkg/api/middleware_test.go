@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -109,5 +112,55 @@ func TestAuthMiddlewareTrustedModeRejectsLegacyHeaders(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddlewareLogsStructuredRequestFields(t *testing.T) {
+	t.Setenv("AGENTFORGE_AUTH_MODE", "header")
+	logBuf, restoreLog := captureStdLogger(t)
+	defer restoreLog()
+
+	handler := AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks/task_123", nil)
+	req.Header.Set("X-Tenant-Id", "tnt_1")
+	req.Header.Set("X-User-Id", "user_1")
+	req.Header.Set("X-Request-Id", "req_custom")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+	line := logBuf.String()
+	for _, want := range []string{
+		"request method=GET",
+		"path=/tasks/task_123",
+		"status=204",
+		"request_id=req_custom",
+		"tenant_id=tnt_1",
+		"user_id=user_1",
+		"latency_ms=",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected log to contain %q, got: %s", want, line)
+		}
+	}
+}
+
+func captureStdLogger(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+	var buf bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	prevPrefix := log.Prefix()
+
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+
+	return &buf, func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+		log.SetPrefix(prevPrefix)
 	}
 }

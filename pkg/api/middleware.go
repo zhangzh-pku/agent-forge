@@ -3,9 +3,11 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/agentforge/agentforge/pkg/util"
 )
@@ -46,19 +48,24 @@ func GetTenant(ctx context.Context) *TenantInfo {
 //   - default: trusted in aws runtime, header otherwise.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now().UTC()
+		lrw := &loggingResponseWriter{ResponseWriter: w}
+
 		authMode := effectiveAuthMode()
-		tenantID, userID := extractIdentityFromRequest(r, authMode)
 		requestID := r.Header.Get("X-Request-Id")
 		if requestID == "" {
 			requestID = util.NewID("req_")
 		}
-		w.Header().Set("X-Request-Id", requestID)
+		lrw.Header().Set("X-Request-Id", requestID)
+		tenantID, userID := extractIdentityFromRequest(r, authMode)
 		if tenantID == "" {
-			http.Error(w, `{"error":"missing authenticated tenant identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
+			http.Error(lrw, `{"error":"missing authenticated tenant identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
+			logRequest(r, lrw, startedAt, requestID, tenantID, userID)
 			return
 		}
 		if userID == "" {
-			http.Error(w, `{"error":"missing authenticated user identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
+			http.Error(lrw, `{"error":"missing authenticated user identity","request_id":"`+requestID+`"}`, http.StatusUnauthorized)
+			logRequest(r, lrw, startedAt, requestID, tenantID, userID)
 			return
 		}
 		ctx := context.WithValue(r.Context(), tenantContextKey{}, &TenantInfo{
@@ -66,8 +73,47 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			UserID:    userID,
 			RequestID: requestID,
 		})
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(lrw, r.WithContext(ctx))
+		logRequest(r, lrw, startedAt, requestID, tenantID, userID)
 	})
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	writtenByte int
+}
+
+func (w *loggingResponseWriter) WriteHeader(statusCode int) {
+	w.status = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *loggingResponseWriter) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.writtenByte += n
+	return n, err
+}
+
+func logRequest(r *http.Request, w *loggingResponseWriter, startedAt time.Time, requestID, tenantID, userID string) {
+	status := w.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	log.Printf(
+		"request method=%s path=%s status=%d latency_ms=%d request_id=%s tenant_id=%s user_id=%s bytes=%d",
+		r.Method,
+		r.URL.Path,
+		status,
+		time.Since(startedAt).Milliseconds(),
+		requestID,
+		tenantID,
+		userID,
+		w.writtenByte,
+	)
 }
 
 func extractIdentityFromRequest(r *http.Request, mode string) (tenantID, userID string) {

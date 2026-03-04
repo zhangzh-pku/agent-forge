@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentforge/agentforge/pkg/model"
 )
@@ -51,8 +52,21 @@ type AWSPusher struct {
 
 	mu              sync.Mutex
 	chunkers        map[string]*connectionChunker
-	deadConnections map[string]bool
+	deadConnections map[string]deadConnectionEntry
+	deadTTL         time.Duration
+	deadLimit       int
+	now             func() time.Time
 }
+
+type deadConnectionEntry struct {
+	markedAt  time.Time
+	expiresAt time.Time
+}
+
+const (
+	defaultDeadConnectionTTL   = 15 * time.Minute
+	defaultDeadConnectionLimit = 10000
+)
 
 // NewAWSPusher creates a new AWS API Gateway pusher.
 // postFunc should wrap apigatewaymanagementapi.Client.PostToConnection.
@@ -71,7 +85,10 @@ func NewChunkedAWSPusher(endpoint string, cfg ChunkerConfig, postFunc func(ctx c
 		postFunc:        postFunc,
 		chunkCfg:        &cfg,
 		chunkers:        make(map[string]*connectionChunker),
-		deadConnections: make(map[string]bool),
+		deadConnections: make(map[string]deadConnectionEntry),
+		deadTTL:         defaultDeadConnectionTTL,
+		deadLimit:       defaultDeadConnectionLimit,
+		now:             func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -129,7 +146,8 @@ func (p *AWSPusher) getOrCreateChunker(connectionID string) *connectionChunker {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.deadConnections[connectionID] {
+	now := p.nowUTC()
+	if p.isDeadLocked(connectionID, now) {
 		return nil
 	}
 	if c, ok := p.chunkers[connectionID]; ok {
@@ -156,17 +174,22 @@ func (p *AWSPusher) getOrCreateChunker(connectionID string) *connectionChunker {
 func (p *AWSPusher) isDead(connectionID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.deadConnections[connectionID]
+	return p.isDeadLocked(connectionID, p.nowUTC())
 }
 
 func (p *AWSPusher) markDead(connectionID string) {
 	var cc *connectionChunker
 	p.mu.Lock()
-	if p.deadConnections[connectionID] {
+	now := p.nowUTC()
+	if p.isDeadLocked(connectionID, now) {
 		p.mu.Unlock()
 		return
 	}
-	p.deadConnections[connectionID] = true
+	p.deadConnections[connectionID] = deadConnectionEntry{
+		markedAt:  now,
+		expiresAt: now.Add(p.deadTTL),
+	}
+	p.pruneDeadConnectionsLocked(now)
 	cc = p.chunkers[connectionID]
 	delete(p.chunkers, connectionID)
 	p.mu.Unlock()
@@ -174,6 +197,52 @@ func (p *AWSPusher) markDead(connectionID string) {
 	if cc != nil {
 		cc.chunker.Stop()
 	}
+}
+
+func (p *AWSPusher) isDeadLocked(connectionID string, now time.Time) bool {
+	entry, ok := p.deadConnections[connectionID]
+	if !ok {
+		return false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(p.deadConnections, connectionID)
+		return false
+	}
+	return true
+}
+
+func (p *AWSPusher) pruneDeadConnectionsLocked(now time.Time) {
+	for id, entry := range p.deadConnections {
+		if !entry.expiresAt.After(now) {
+			delete(p.deadConnections, id)
+		}
+	}
+	if len(p.deadConnections) <= p.deadLimit {
+		return
+	}
+	for len(p.deadConnections) > p.deadLimit {
+		var oldestID string
+		var oldestAt time.Time
+		first := true
+		for id, entry := range p.deadConnections {
+			if first || entry.markedAt.Before(oldestAt) {
+				oldestID = id
+				oldestAt = entry.markedAt
+				first = false
+			}
+		}
+		if first {
+			return
+		}
+		delete(p.deadConnections, oldestID)
+	}
+}
+
+func (p *AWSPusher) nowUTC() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now().UTC()
 }
 
 type connectionChunker struct {

@@ -382,6 +382,93 @@ func TestChunkedAWSPusherGoneConnection(t *testing.T) {
 	}
 }
 
+func TestChunkedAWSPusherDeadConnectionExpires(t *testing.T) {
+	var calls int
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+
+	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1, // flush immediately
+	}, func(_ context.Context, _ string, _ []byte) error {
+		calls++
+		if calls == 1 {
+			return &GoneError{}
+		}
+		return nil
+	})
+	pusher.deadTTL = 5 * time.Second
+	pusher.now = func() time.Time { return now }
+
+	alive, err := pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepStart,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for gone connection, got %v", err)
+	}
+	if alive {
+		t.Fatal("expected alive=false for first gone push")
+	}
+
+	alive, err = pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepEnd,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error while dead entry still valid, got %v", err)
+	}
+	if alive {
+		t.Fatal("expected alive=false before dead entry TTL expires")
+	}
+	if calls != 1 {
+		t.Fatalf("expected no additional post while dead entry is active, got %d", calls)
+	}
+
+	now = now.Add(6 * time.Second)
+	alive, err = pusher.Push(context.Background(), "conn_1", &model.StreamEvent{
+		TaskID: "task_1",
+		RunID:  "run_1",
+		Type:   model.StreamEventStepEnd,
+	})
+	if err != nil {
+		t.Fatalf("expected push retry after dead entry expiry, got %v", err)
+	}
+	if !alive {
+		t.Fatal("expected alive=true after dead entry expires and push succeeds")
+	}
+	if calls != 2 {
+		t.Fatalf("expected post retried after expiry, got %d calls", calls)
+	}
+}
+
+func TestChunkedAWSPusherDeadConnectionLimitPrunesOldest(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{
+		FlushInterval: 10 * time.Second,
+		FlushBytes:    1024,
+	}, func(_ context.Context, _ string, _ []byte) error {
+		return nil
+	})
+	pusher.deadTTL = time.Hour
+	pusher.deadLimit = 2
+	pusher.now = func() time.Time { return now }
+
+	pusher.markDead("conn_1")
+	now = now.Add(time.Second)
+	pusher.markDead("conn_2")
+	now = now.Add(time.Second)
+	pusher.markDead("conn_3")
+
+	if pusher.isDead("conn_1") {
+		t.Fatal("expected oldest dead connection to be pruned when limit exceeded")
+	}
+	if !pusher.isDead("conn_2") || !pusher.isDead("conn_3") {
+		t.Fatal("expected newest dead connections to remain tracked")
+	}
+}
+
 func TestChunkedAWSPusherTransientErrorRecovers(t *testing.T) {
 	var calls int
 	pusher := NewChunkedAWSPusher("https://example.com", ChunkerConfig{

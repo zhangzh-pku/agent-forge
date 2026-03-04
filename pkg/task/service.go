@@ -298,7 +298,7 @@ func (s *Service) Resume(ctx context.Context, taskID string, req *ResumeRequest)
 
 	// Atomically apply run creation + task state transition for resume.
 	if err := s.store.ApplyResumeTransition(ctx, taskID, run, []model.TaskStatus{
-		model.TaskStatusQueued, model.TaskStatusRunning,
+		model.TaskStatusQueued,
 		model.TaskStatusSucceeded, model.TaskStatusFailed, model.TaskStatusAborted,
 	}, model.TaskStatusQueued); err != nil {
 		return nil, err

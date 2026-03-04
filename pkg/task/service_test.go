@@ -333,6 +333,30 @@ func TestResumeWrongUser(t *testing.T) {
 	}
 }
 
+func TestResumeRejectedWhenTaskRunning(t *testing.T) {
+	svc, store, _ := newTestService()
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &CreateRequest{TenantID: "tnt_1", UserID: "user_1", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createStepsWithCheckpoints(ctx, store, resp.RunID, 1)
+	if err := store.UpdateTaskStatus(ctx, resp.TaskID, []model.TaskStatus{model.TaskStatusQueued}, model.TaskStatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.Resume(ctx, resp.TaskID, &ResumeRequest{
+		TenantID:      "tnt_1",
+		UserID:        "user_1",
+		FromRunID:     resp.RunID,
+		FromStepIndex: 0,
+	})
+	if !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("expected state conflict while task is RUNNING, got %v", err)
+	}
+}
+
 func TestResumeMissingUserRejected(t *testing.T) {
 	svc, store, _ := newTestService()
 	ctx := context.Background()
