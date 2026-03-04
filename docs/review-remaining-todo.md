@@ -55,7 +55,6 @@
 | R-128 | `REL-S4` | Dynamo 可靠性集成测试扩展到 claim/transition/compaction/unprocessed-items。 |
 | R-129 | `REL-S6`, `MAIN-Should-7` | 暴露并接线可靠性指标/告警（claim_conflict/finalize_fail/push_error/recovery_count/dlq_depth）。 |
 | R-130 | `REL-S8` | 事件推送改为有界并发 + 单连接超时 + 限流。 |
-| R-131 | `SEC-SHOULD-03` | `RestoreWorkspace` 增加 SHA256 校验并返回完整性错误。 |
 | R-132 | `SEC-SHOULD-04`, `CC-N17` | IAM 权限最小化收敛（含审计流程），减少广泛 `Scan`/过宽 S3 动作。 |
 
 ## P2 - 测试、发布与工程化补齐
@@ -91,7 +90,6 @@
 | R-301 | `CC-N1` | `OPENAI_BASE_URL` 做 SSRF 防护（scheme 白名单+禁止 IP 字面量）。 |
 | R-302 | `CC-N2` | Prompt injection 基础防护（长度限制/可选 deny-list）。 |
 | R-303 | `CC-N3` | EventStore 增加 tenant 维度隔离策略。 |
-| R-304 | `CC-N4` | `memory.Load` 校验 SHA256，不匹配返回损坏错误。 |
 | R-305 | `CC-N5` | `Workspace.Snapshot` 降低持锁时间。 |
 | R-306 | `CC-N6` | workspace 默认目录权限从 `0755` 收敛到 `0700`。 |
 | R-307 | `CC-N7` | `Workspace.Delete` 支持目录删除语义。 |

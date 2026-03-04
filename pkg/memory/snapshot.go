@@ -5,13 +5,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/model"
 )
+
+var ErrSnapshotIntegrity = errors.New("memory: snapshot integrity check failed")
 
 // Snapshotter saves and loads memory snapshots via an artifact store.
 type Snapshotter struct {
@@ -65,7 +69,32 @@ func (s *Snapshotter) Load(ctx context.Context, ref *model.ArtifactRef) (*model.
 	}
 	defer func() { _ = rc.Close() }()
 
-	gr, err := gzip.NewReader(rc)
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("memory: read raw snapshot: %w", err)
+	}
+	if ref.Size > 0 && int64(len(raw)) != ref.Size {
+		return nil, fmt.Errorf(
+			"%w: snapshot size mismatch (expected=%d got=%d)",
+			ErrSnapshotIntegrity,
+			ref.Size,
+			len(raw),
+		)
+	}
+	if ref.SHA256 != "" {
+		sum := sha256.Sum256(raw)
+		actual := fmt.Sprintf("%x", sum)
+		if actual != ref.SHA256 {
+			return nil, fmt.Errorf(
+				"%w: snapshot sha256 mismatch (expected=%s got=%s)",
+				ErrSnapshotIntegrity,
+				ref.SHA256,
+				actual,
+			)
+		}
+	}
+
+	gr, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("memory: gzip reader: %w", err)
 	}

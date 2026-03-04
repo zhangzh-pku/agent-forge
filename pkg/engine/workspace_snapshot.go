@@ -1,13 +1,19 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
 	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/workspace"
 )
+
+var ErrWorkspaceSnapshotIntegrity = errors.New("engine: workspace snapshot integrity check failed")
 
 // WorkspaceS3Key returns the canonical S3 key for a workspace snapshot.
 func WorkspaceS3Key(tenantID, taskID, runID string, stepIndex int) string {
@@ -43,7 +49,32 @@ func RestoreWorkspace(ctx context.Context, ws workspace.Manager, store artifact.
 	}
 	defer func() { _ = rc.Close() }()
 
-	if err := ws.Restore(ctx, rc); err != nil {
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("read workspace snapshot: %w", err)
+	}
+	if ref.Size > 0 && int64(len(raw)) != ref.Size {
+		return fmt.Errorf(
+			"%w: workspace snapshot size mismatch (expected=%d got=%d)",
+			ErrWorkspaceSnapshotIntegrity,
+			ref.Size,
+			len(raw),
+		)
+	}
+	if ref.SHA256 != "" {
+		sum := sha256.Sum256(raw)
+		actual := fmt.Sprintf("%x", sum)
+		if actual != ref.SHA256 {
+			return fmt.Errorf(
+				"%w: workspace snapshot sha256 mismatch (expected=%s got=%s)",
+				ErrWorkspaceSnapshotIntegrity,
+				ref.SHA256,
+				actual,
+			)
+		}
+	}
+
+	if err := ws.Restore(ctx, bytes.NewReader(raw)); err != nil {
 		return fmt.Errorf("restore workspace: %w", err)
 	}
 	return nil

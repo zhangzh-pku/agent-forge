@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/agentforge/agentforge/pkg/artifact"
@@ -68,5 +69,47 @@ func TestS3Key(t *testing.T) {
 	expected := "memory/tnt_1/task_1/run_1/step_00000042.json.gz"
 	if key != expected {
 		t.Fatalf("got %q, want %q", key, expected)
+	}
+}
+
+func TestLoadRejectsSHA256Mismatch(t *testing.T) {
+	store := artifact.NewMemoryStore()
+	snapshotter := NewSnapshotter(store)
+	ctx := context.Background()
+
+	ref, err := snapshotter.Save(ctx, "tnt_1", "task_1", &model.MemorySnapshot{
+		RunID:     "run_1",
+		StepIndex: 1,
+		Messages:  []model.MemoryMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bad := *ref
+	bad.SHA256 = "deadbeef"
+	if _, err := snapshotter.Load(ctx, &bad); !errors.Is(err, ErrSnapshotIntegrity) {
+		t.Fatalf("expected ErrSnapshotIntegrity, got %v", err)
+	}
+}
+
+func TestLoadRejectsSizeMismatch(t *testing.T) {
+	store := artifact.NewMemoryStore()
+	snapshotter := NewSnapshotter(store)
+	ctx := context.Background()
+
+	ref, err := snapshotter.Save(ctx, "tnt_1", "task_1", &model.MemorySnapshot{
+		RunID:     "run_1",
+		StepIndex: 2,
+		Messages:  []model.MemoryMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bad := *ref
+	bad.Size = ref.Size + 1
+	if _, err := snapshotter.Load(ctx, &bad); !errors.Is(err, ErrSnapshotIntegrity) {
+		t.Fatalf("expected ErrSnapshotIntegrity, got %v", err)
 	}
 }
