@@ -39,6 +39,20 @@ type SQSQueue struct {
 	isFIFO            bool
 }
 
+// HealthCheck verifies SQS queue reachability.
+func (q *SQSQueue) HealthCheck(ctx context.Context) error {
+	_, err := q.client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl: aws.String(q.queueURL),
+		AttributeNames: []sqstypes.QueueAttributeName{
+			sqstypes.QueueAttributeNameApproximateNumberOfMessages,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("queue: sqs health check: %w", err)
+	}
+	return nil
+}
+
 // NewSQSQueue creates an SQS-backed queue implementation.
 func NewSQSQueue(client *sqs.Client, cfg SQSQueueConfig) (*SQSQueue, error) {
 	if client == nil {

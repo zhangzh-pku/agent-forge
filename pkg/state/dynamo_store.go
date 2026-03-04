@@ -46,6 +46,22 @@ type DynamoStore struct {
 	eventRetention   time.Duration
 }
 
+// HealthCheck verifies DynamoDB connectivity with a lightweight GetItem request.
+func (s *DynamoStore) HealthCheck(ctx context.Context) error {
+	_, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(s.tasksTable),
+		ConsistentRead: aws.Bool(false),
+		Key: map[string]dbtypes.AttributeValue{
+			"pk": avString(taskPK("__healthcheck__")),
+			"sk": avString(taskMetaSK),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("state: dynamodb health check: %w", err)
+	}
+	return nil
+}
+
 // NewDynamoStore creates a new DynamoDB-backed state store.
 func NewDynamoStore(client *dynamodb.Client, cfg DynamoStoreConfig) (*DynamoStore, error) {
 	if client == nil {

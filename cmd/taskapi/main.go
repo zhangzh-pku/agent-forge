@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -31,6 +32,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
+
+type readinessChecker interface {
+	HealthCheck(ctx context.Context) error
+}
 
 func main() {
 	port := os.Getenv("PORT")
@@ -62,6 +67,43 @@ func main() {
 		if _, err := fmt.Fprintln(w, `{"status":"ok"}`); err != nil {
 			log.Printf("health write failed: %v", err)
 		}
+	})
+	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		checks := map[string]string{
+			"state": "ok",
+			"queue": "ok",
+		}
+		errorsByCheck := map[string]string{}
+		statusCode := http.StatusOK
+
+		if checker, ok := store.(readinessChecker); ok {
+			if err := checker.HealthCheck(probeCtx); err != nil {
+				checks["state"] = "error"
+				errorsByCheck["state"] = err.Error()
+				statusCode = http.StatusServiceUnavailable
+			}
+		}
+
+		if checker, ok := q.(readinessChecker); ok {
+			if err := checker.HealthCheck(probeCtx); err != nil {
+				checks["queue"] = "error"
+				errorsByCheck["queue"] = err.Error()
+				statusCode = http.StatusServiceUnavailable
+			}
+		}
+
+		resp := map[string]interface{}{
+			"status": "ready",
+			"checks": checks,
+		}
+		if statusCode != http.StatusOK {
+			resp["status"] = "not_ready"
+			resp["errors"] = errorsByCheck
+		}
+		writeJSON(w, statusCode, resp)
 	})
 
 	srv := &http.Server{
@@ -160,6 +202,14 @@ func main() {
 	}
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, code int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("json encode failed: %v", err)
 	}
 }
 

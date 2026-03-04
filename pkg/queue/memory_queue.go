@@ -68,6 +68,11 @@ type MemoryQueue struct {
 	dlq []*model.SQSMessage
 }
 
+// HealthCheck always succeeds for in-memory local queue.
+func (q *MemoryQueue) HealthCheck(_ context.Context) error {
+	return nil
+}
+
 // NewMemoryQueue creates a queue with default config and the provided buffer size.
 func NewMemoryQueue(bufSize int) *MemoryQueue {
 	cfg := DefaultMemoryQueueConfig()

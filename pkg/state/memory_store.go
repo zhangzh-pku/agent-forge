@@ -22,6 +22,11 @@ type MemoryStore struct {
 	idempotency    map[string]string // keyed by "tenant_id#idempotency_key" → task_id
 }
 
+// HealthCheck always succeeds for in-memory local state.
+func (s *MemoryStore) HealthCheck(_ context.Context) error {
+	return nil
+}
+
 // NewMemoryStore creates a new in-memory state store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
