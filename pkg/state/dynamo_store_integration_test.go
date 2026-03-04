@@ -314,6 +314,101 @@ func TestDynamoStoreIntegration_ClaimResetAndResumeTransition(t *testing.T) {
 	}
 }
 
+func TestDynamoStoreIntegration_TransactionalAndConditionalSemantics(t *testing.T) {
+	endpoint := strings.TrimSpace(os.Getenv("AGENTFORGE_INTEGRATION_AWS_ENDPOINT"))
+	if endpoint == "" {
+		t.Skip("set AGENTFORGE_INTEGRATION_AWS_ENDPOINT to run DynamoDB integration tests")
+	}
+
+	ctx := context.Background()
+	client := integrationDynamoClient(t, endpoint)
+
+	cfg := createIntegrationStateTables(t, ctx, client, fmt.Sprintf("af-it-txn-%d", time.Now().UnixNano()))
+	store, err := NewDynamoStore(client, cfg)
+	if err != nil {
+		t.Fatalf("new dynamo store: %v", err)
+	}
+
+	now := time.Now().UTC()
+	task1 := &model.Task{
+		TaskID:         "task_txn_1",
+		TenantID:       "tenant_txn",
+		UserID:         "user_txn",
+		Status:         model.TaskStatusQueued,
+		ActiveRunID:    "run_txn_1",
+		Prompt:         "txn integration",
+		IdempotencyKey: "idem_txn_1",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	run1 := &model.Run{
+		TaskID:   task1.TaskID,
+		RunID:    "run_txn_1",
+		TenantID: task1.TenantID,
+		Status:   model.RunStatusQueued,
+	}
+	if err := store.ApplyCreateTransition(ctx, task1, run1); err != nil {
+		t.Fatalf("seed apply create transition: %v", err)
+	}
+
+	gotByIdem, err := store.GetTaskByIdempotencyKey(ctx, task1.TenantID, task1.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("get task by idempotency key: %v", err)
+	}
+	if gotByIdem.TaskID != task1.TaskID {
+		t.Fatalf("unexpected idempotency task mapping: got %s want %s", gotByIdem.TaskID, task1.TaskID)
+	}
+
+	task2 := &model.Task{
+		TaskID:         "task_txn_2",
+		TenantID:       task1.TenantID,
+		UserID:         task1.UserID,
+		Status:         model.TaskStatusQueued,
+		ActiveRunID:    "run_txn_2",
+		Prompt:         "txn conflict integration",
+		IdempotencyKey: task1.IdempotencyKey,
+		CreatedAt:      now.Add(time.Second),
+		UpdatedAt:      now.Add(time.Second),
+	}
+	run2 := &model.Run{
+		TaskID:   task2.TaskID,
+		RunID:    "run_txn_2",
+		TenantID: task2.TenantID,
+		Status:   model.RunStatusQueued,
+	}
+	if err := store.ApplyCreateTransition(ctx, task2, run2); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("conflicting apply create transition expected ErrAlreadyExists, got %v", err)
+	}
+	if _, err := store.GetTask(ctx, task2.TaskID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("transaction should rollback task insert, got %v", err)
+	}
+	if _, err := store.GetRun(ctx, task2.TaskID, run2.RunID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("transaction should rollback run insert, got %v", err)
+	}
+
+	if err := store.UpdateTaskStatus(ctx, task1.TaskID, []model.TaskStatus{model.TaskStatusFailed}, model.TaskStatusSucceeded); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unexpected update task status result for non-matching from-state: %v", err)
+	}
+
+	conflictResumeRun := &model.Run{
+		TaskID:      task1.TaskID,
+		RunID:       "run_txn_resume_conflict",
+		TenantID:    task1.TenantID,
+		Status:      model.RunStatusQueued,
+		ParentRunID: run1.RunID,
+	}
+	if err := store.ApplyResumeTransition(ctx, task1.TaskID, conflictResumeRun, []model.TaskStatus{model.TaskStatusFailed}, model.TaskStatusQueued); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting apply resume transition expected ErrConflict, got %v", err)
+	}
+	if _, err := store.GetRun(ctx, task1.TaskID, conflictResumeRun.RunID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("resume conflict should not create run row, got %v", err)
+	}
+
+	if err := store.AddRunUsage(ctx, task1.TaskID, "run_missing", &model.TokenUsage{Input: 1, Output: 1, Total: 2}, 0.01); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("add run usage on missing run expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestDynamoStoreIntegration_CompactEvents(t *testing.T) {
 	endpoint := strings.TrimSpace(os.Getenv("AGENTFORGE_INTEGRATION_AWS_ENDPOINT"))
 	if endpoint == "" {
