@@ -35,6 +35,7 @@ const (
 	lengthContinuePrompt       = "Your previous response was truncated due to length. Continue exactly from where you stopped, without repeating prior content."
 	streamPushMaxConcurrency   = 16
 	streamPushPerConnTimeout   = 2 * time.Second
+	streamPushRatePerSecond    = 200
 )
 
 var (
@@ -665,14 +666,41 @@ func (e *Engine) pushEvent(ctx context.Context, tenantID, taskID, runID string, 
 	if concurrency > len(targets) {
 		concurrency = len(targets)
 	}
+	rateInterval := time.Duration(0)
+	if streamPushRatePerSecond > 0 {
+		rateInterval = time.Second / time.Duration(streamPushRatePerSecond)
+		if rateInterval <= 0 {
+			rateInterval = time.Nanosecond
+		}
+	}
 
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, concurrency)
 	staleConnections := make(chan string, len(targets))
+	var rateTicker *time.Ticker
+	if rateInterval > 0 {
+		rateTicker = time.NewTicker(rateInterval)
+		defer rateTicker.Stop()
+	}
+	dispatched := 0
 
+dispatchLoop:
 	for _, conn := range targets {
+		if rateTicker != nil && dispatched >= concurrency {
+			select {
+			case <-ctx.Done():
+				break dispatchLoop
+			case <-rateTicker.C:
+			}
+		}
+
 		c := conn
-		sem <- struct{}{}
+		select {
+		case <-ctx.Done():
+			break dispatchLoop
+		case sem <- struct{}{}:
+		}
+		dispatched++
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

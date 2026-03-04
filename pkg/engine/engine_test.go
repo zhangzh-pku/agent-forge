@@ -1233,6 +1233,52 @@ func TestEnginePushEventUsesBoundedConcurrency(t *testing.T) {
 	}
 }
 
+func TestEnginePushEventRateLimitedAfterBurst(t *testing.T) {
+	if streamPushRatePerSecond <= 0 {
+		t.Skip("stream push rate limit disabled")
+	}
+
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	extraConnections := 20
+	connectionCount := streamPushMaxConcurrency + extraConnections
+	for i := 0; i < connectionCount; i++ {
+		if err := h.store.PutConnection(context.Background(), &model.Connection{
+			ConnectionID: fmt.Sprintf("rate_conn_%d", i),
+			TenantID:     h.task.TenantID,
+			UserID:       h.task.UserID,
+			TaskID:       h.task.TaskID,
+			RunID:        h.run.RunID,
+			ConnectedAt:  time.Now().UTC(),
+			TTL:          time.Now().Add(2 * time.Hour).Unix(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pusher := &concurrencyProbePusher{}
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, nil, nil, pusher)
+
+	var seq int64
+	start := time.Now()
+	eng.pushEvent(context.Background(), h.task.TenantID, h.task.TaskID, h.run.RunID, &seq, model.StreamEventTokenChunk, map[string]interface{}{
+		"token": "x",
+	})
+	elapsed := time.Since(start)
+
+	if got := pusher.calls.Load(); got != int64(connectionCount) {
+		t.Fatalf("expected %d push calls, got %d", connectionCount, got)
+	}
+
+	interval := time.Second / time.Duration(streamPushRatePerSecond)
+	expectedMin := time.Duration(extraConnections) * interval
+	tolerance := expectedMin / 3
+	if elapsed+tolerance < expectedMin {
+		t.Fatalf("expected push dispatch to be rate-limited (elapsed=%s, expected_min~%s)", elapsed, expectedMin)
+	}
+}
+
 // unknownToolLLM returns a call to an unknown tool on first call, then a final answer.
 type unknownToolLLM struct {
 	calls int
