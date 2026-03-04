@@ -27,7 +27,6 @@
 | R-102 | `CC-E2` | 实现对话滑动窗口/摘要策略，抑制上下文无限增长。 |
 | R-103 | `CC-E3` | `fs.read` 增加可配置读取上限（默认 512KB）并标记截断。 |
 | R-104 | `CC-E4` | `fs.export` goroutine 生命周期治理（`ctx.Done`/`errgroup`）。 |
-| R-106 | `CC-E6` | Step 大字段（Input/Output）超过阈值时落 S3，仅存引用。 |
 | R-108 | `CC-E8` | 流式请求使用独立 `http.Client`（`Timeout=0`）并依赖 context 控时。 |
 | R-109 | `CC-E9` | `shouldFallbackOnError` 默认改为 false，仅白名单错误触发 fallback。 |
 | R-110 | `CC-E10` | 429 重试读取 `Retry-After` 作为 backoff 下限。 |

@@ -32,6 +32,8 @@ const (
 	eventTextTruncatedSuffix   = "...[truncated]"
 	maxEngineMemoryMessages    = 64
 	maxConsecutiveLengthStops  = 3
+	maxInlineStepFieldBytes    = 128 * 1024
+	externalizedStepFieldTag   = "[EXTERNALIZED_STEP_FIELD]"
 	lengthContinuePrompt       = "Your previous response was truncated due to length. Continue exactly from where you stopped, without repeating prior content."
 	streamPushMaxConcurrency   = 16
 	streamPushPerConnTimeout   = 2 * time.Second
@@ -96,6 +98,13 @@ type persistedToolOutput struct {
 	Tool       string `json:"tool"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	Output     string `json:"output"`
+}
+
+type externalizedStepField struct {
+	Storage       string            `json:"storage"`
+	Field         string            `json:"field"`
+	Artifact      model.ArtifactRef `json:"artifact"`
+	OriginalBytes int               `json:"original_bytes"`
 }
 
 // Execute runs the ReAct loop for a given task and run.
@@ -426,6 +435,17 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 			TokenUsage:    llmResp.TokenUsage,
 			CheckpointRef: checkpointRef,
 		}
+		if err := e.externalizeLargeStepFields(ctx, task.TenantID, task.TaskID, run.RunID, step); err != nil {
+			log.Error("engine: externalize step fields failed", map[string]interface{}{"error": err.Error(), "step_index": stepIdx})
+			e.metrics.TaskFailed()
+			return &RunResult{
+				Status:       model.RunStatusFailed,
+				LastStep:     stepIdx,
+				ErrorMessage: fmt.Sprintf("externalize step fields failed: %v", err),
+				TotalTokens:  totalTokens,
+				TotalCostUSD: totalCost,
+			}, nil
+		}
 		if err := e.store.PutStep(ctx, step); err != nil {
 			if !errors.Is(err, state.ErrConflict) {
 				// Non-idempotent failure — step was not persisted.
@@ -500,6 +520,17 @@ func (e *Engine) Execute(ctx context.Context, task *model.Task, run *model.Run, 
 				TSEnd:         stepEnd,
 				CheckpointRef: checkpointRef,
 			}
+			if err := e.externalizeLargeStepFields(ctx, task.TenantID, task.TaskID, run.RunID, finalStep); err != nil {
+				log.Error("engine: externalize final step fields failed", map[string]interface{}{"error": err.Error(), "step_index": stepIdx + 1})
+				e.metrics.TaskFailed()
+				return &RunResult{
+					Status:       model.RunStatusFailed,
+					LastStep:     stepIdx + 1,
+					ErrorMessage: fmt.Sprintf("externalize final step fields failed: %v", err),
+					TotalTokens:  totalTokens,
+					TotalCostUSD: totalCost,
+				}, nil
+			}
 			if err := e.store.PutStep(ctx, finalStep); err != nil {
 				log.Error("engine: write final step failed", map[string]interface{}{"error": err.Error(), "step_index": stepIdx + 1})
 			}
@@ -548,6 +579,53 @@ func classifyTaskPrompt(prompt string) string {
 	default:
 		return "general"
 	}
+}
+
+func StepFieldS3Key(tenantID, taskID, runID string, stepIndex int, field string) string {
+	return fmt.Sprintf("steps/%s/%s/%s/step_%08d_%s.txt", tenantID, taskID, runID, stepIndex, field)
+}
+
+func (e *Engine) externalizeLargeStepFields(ctx context.Context, tenantID, taskID, runID string, step *model.Step) error {
+	if step == nil || e.artifacts == nil {
+		return nil
+	}
+	input, err := e.externalizeStepField(ctx, tenantID, taskID, runID, step.StepIndex, "input", step.Input)
+	if err != nil {
+		return err
+	}
+	output, err := e.externalizeStepField(ctx, tenantID, taskID, runID, step.StepIndex, "output", step.Output)
+	if err != nil {
+		return err
+	}
+	step.Input = input
+	step.Output = output
+	return nil
+}
+
+func (e *Engine) externalizeStepField(ctx context.Context, tenantID, taskID, runID string, stepIndex int, field, value string) (string, error) {
+	if len(value) <= maxInlineStepFieldBytes {
+		return value, nil
+	}
+	key := StepFieldS3Key(tenantID, taskID, runID, stepIndex, field)
+	sha, size, err := e.artifacts.Put(ctx, key, strings.NewReader(value))
+	if err != nil {
+		return "", fmt.Errorf("externalize step %s field: %w", field, err)
+	}
+	meta := externalizedStepField{
+		Storage: "artifact",
+		Field:   field,
+		Artifact: model.ArtifactRef{
+			S3Key:  key,
+			SHA256: sha,
+			Size:   size,
+		},
+		OriginalBytes: len(value),
+	}
+	payload, err := json.Marshal(meta)
+	if err != nil {
+		return "", fmt.Errorf("marshal externalized step field metadata: %w", err)
+	}
+	return externalizedStepFieldTag + string(payload), nil
 }
 
 func collectToolSpecs(reg ToolRegistry) []ToolSpec {

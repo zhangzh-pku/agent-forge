@@ -459,6 +459,59 @@ func TestEngineStreamingCancellationDuringResponse(t *testing.T) {
 	}
 }
 
+func TestEngineExternalizesLargeStepFields(t *testing.T) {
+	h := setupHarness(t)
+	defer h.cleanup()
+
+	huge := strings.Repeat("x", maxInlineStepFieldBytes+2048)
+	llm := &hugeFinalLLM{content: huge}
+	registry := NewRegistry()
+
+	eng := NewEngine(DefaultEngineConfig(), h.store, h.artifacts, llm, registry, h.pusher)
+	result, err := eng.Execute(context.Background(), h.task, h.run, h.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != model.RunStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s", result.Status)
+	}
+
+	steps, err := h.store.ListSteps(context.Background(), h.run.RunID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) < 2 {
+		t.Fatalf("expected at least 2 steps, got %d", len(steps))
+	}
+
+	for _, step := range steps {
+		if step.Input == "" || !strings.HasPrefix(step.Input, externalizedStepFieldTag) {
+			continue
+		}
+		raw := strings.TrimPrefix(step.Input, externalizedStepFieldTag)
+		var meta externalizedStepField
+		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+			t.Fatalf("unmarshal externalized metadata: %v", err)
+		}
+		if meta.Artifact.S3Key == "" {
+			t.Fatal("expected artifact s3_key in externalized metadata")
+		}
+		exists, err := h.artifacts.Exists(context.Background(), meta.Artifact.S3Key)
+		if err != nil {
+			t.Fatalf("artifact exists check failed: %v", err)
+		}
+		if !exists {
+			t.Fatalf("expected externalized artifact to exist: %s", meta.Artifact.S3Key)
+		}
+		if meta.OriginalBytes <= maxInlineStepFieldBytes {
+			t.Fatalf("expected original bytes above threshold, got %d", meta.OriginalBytes)
+		}
+		return
+	}
+
+	t.Fatal("expected at least one step with externalized input metadata")
+}
+
 // errorLLMClient returns an error on every call.
 type errorLLMClient struct {
 	err error
@@ -501,6 +554,24 @@ func (l *slowStreamingLLM) ChatStream(ctx context.Context, _ *LLMRequest, onToke
 		FinishReason: "stop",
 		TokenUsage:   &model.TokenUsage{Input: 1, Output: 1, Total: 2},
 		ModelID:      "mock-stream",
+		Provider:     "mock",
+	}, nil
+}
+
+type hugeFinalLLM struct {
+	content string
+}
+
+func (l *hugeFinalLLM) Chat(_ context.Context, _ *LLMRequest) (*LLMResponse, error) {
+	content := l.content
+	if content == "" {
+		content = strings.Repeat("x", maxInlineStepFieldBytes+1024)
+	}
+	return &LLMResponse{
+		Content:      content,
+		FinishReason: "stop",
+		TokenUsage:   &model.TokenUsage{Input: 1, Output: 1, Total: 2},
+		ModelID:      "mock-huge",
 		Provider:     "mock",
 	}, nil
 }
