@@ -115,3 +115,70 @@ func TestSchedulerRunOnceConsistencyCheckAndRepair(t *testing.T) {
 		t.Fatalf("expected repairs applied, got %+v", report.Repair)
 	}
 }
+
+func TestSchedulerRunOnceEventCompaction(t *testing.T) {
+	store := state.NewMemoryStore()
+	q := queue.NewMemoryQueue(10)
+	s := NewScheduler(store, q, SchedulerConfig{
+		Limit:                  100,
+		EventCompactionEnabled: true,
+		EventCompactionWindow:  time.Hour,
+	})
+
+	now := time.Now().UTC()
+	ended := now.Add(-2 * time.Hour)
+	taskObj := &model.Task{
+		TaskID:      "task_compact",
+		TenantID:    "t1",
+		UserID:      "u1",
+		Status:      model.TaskStatusSucceeded,
+		ActiveRunID: "run_compact",
+		Prompt:      "compact events",
+		CreatedAt:   now.Add(-3 * time.Hour),
+		UpdatedAt:   ended,
+	}
+	run := &model.Run{
+		TaskID:   "task_compact",
+		RunID:    "run_compact",
+		TenantID: "t1",
+		Status:   model.RunStatusSucceeded,
+		EndedAt:  &ended,
+	}
+	if err := store.PutTask(context.Background(), taskObj); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutEvent(context.Background(), &model.StreamEvent{
+		TaskID: "task_compact",
+		RunID:  "run_compact",
+		Seq:    1,
+		TS:     now.Add(-2 * time.Hour).Unix(),
+		Type:   model.StreamEventStepEnd,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := s.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.EventCompaction == nil {
+		t.Fatal("expected event compaction report")
+	}
+	if report.EventCompaction.RunsCompacted != 1 {
+		t.Fatalf("expected one compacted run, got %+v", report.EventCompaction)
+	}
+	if report.EventCompaction.EventsRemoved != 1 {
+		t.Fatalf("expected one removed event, got %+v", report.EventCompaction)
+	}
+
+	events, err := store.ReplayEvents(context.Background(), "task_compact", "run_compact", 0, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected events compacted away, got %d", len(events))
+	}
+}

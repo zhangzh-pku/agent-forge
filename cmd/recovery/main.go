@@ -56,16 +56,18 @@ func main() {
 	}
 
 	scheduler := ops.NewScheduler(store, q, ops.SchedulerConfig{
-		Interval:          recoveryCfg.Interval,
-		StaleFor:          recoveryCfg.StaleFor,
-		Limit:             recoveryCfg.Limit,
-		TenantID:          recoveryCfg.TenantID,
-		ConsistencyCheck:  recoveryCfg.ConsistencyCheck,
-		ConsistencyRepair: recoveryCfg.ConsistencyRepair,
+		Interval:               recoveryCfg.Interval,
+		StaleFor:               recoveryCfg.StaleFor,
+		Limit:                  recoveryCfg.Limit,
+		TenantID:               recoveryCfg.TenantID,
+		ConsistencyCheck:       recoveryCfg.ConsistencyCheck,
+		ConsistencyRepair:      recoveryCfg.ConsistencyRepair,
+		EventCompactionEnabled: recoveryCfg.EventCompactionEnabled,
+		EventCompactionWindow:  recoveryCfg.EventCompactionWindow,
 	})
 
 	log.Printf(
-		"AgentForge Recovery starting (runtime=%s, interval=%s, stale_for=%s, limit=%d, tenant=%q, consistency_check=%t, consistency_repair=%t)",
+		"AgentForge Recovery starting (runtime=%s, interval=%s, stale_for=%s, limit=%d, tenant=%q, consistency_check=%t, consistency_repair=%t, event_compaction_enabled=%t, event_compaction_window=%s)",
 		mode,
 		recoveryCfg.Interval,
 		recoveryCfg.StaleFor,
@@ -73,6 +75,8 @@ func main() {
 		recoveryCfg.TenantID,
 		recoveryCfg.ConsistencyCheck,
 		recoveryCfg.ConsistencyRepair,
+		recoveryCfg.EventCompactionEnabled,
+		recoveryCfg.EventCompactionWindow,
 	)
 	scheduler.Start(ctx)
 }

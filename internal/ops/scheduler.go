@@ -3,38 +3,53 @@ package ops
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
+	"github.com/agentforge/agentforge/pkg/model"
 	"github.com/agentforge/agentforge/pkg/queue"
 	"github.com/agentforge/agentforge/pkg/state"
 )
 
 // SchedulerConfig controls stale-run recovery cadence and optional consistency checks.
 type SchedulerConfig struct {
-	Interval          time.Duration
-	StaleFor          time.Duration
-	Limit             int
-	TenantID          string
-	ConsistencyCheck  bool
-	ConsistencyRepair bool
+	Interval               time.Duration
+	StaleFor               time.Duration
+	Limit                  int
+	TenantID               string
+	ConsistencyCheck       bool
+	ConsistencyRepair      bool
+	EventCompactionEnabled bool
+	EventCompactionWindow  time.Duration
+}
+
+// EventCompactionReport summarizes one compaction pass over retained events.
+type EventCompactionReport struct {
+	BeforeTS      int64    `json:"before_ts"`
+	RunsScanned   int      `json:"runs_scanned"`
+	RunsCompacted int      `json:"runs_compacted"`
+	EventsRemoved int      `json:"events_removed"`
+	Errors        []string `json:"errors,omitempty"`
 }
 
 // SchedulerReport is one recovery scheduler execution report.
 type SchedulerReport struct {
-	Timestamp   time.Time       `json:"timestamp"`
-	TenantID    string          `json:"tenant_id,omitempty"`
-	DurationMS  int64           `json:"duration_ms"`
-	Recovery    *RecoveryReport `json:"recovery,omitempty"`
-	Consistency *CheckReport    `json:"consistency,omitempty"`
-	Repair      *RepairReport   `json:"repair,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	Timestamp       time.Time              `json:"timestamp"`
+	TenantID        string                 `json:"tenant_id,omitempty"`
+	DurationMS      int64                  `json:"duration_ms"`
+	Recovery        *RecoveryReport        `json:"recovery,omitempty"`
+	Consistency     *CheckReport           `json:"consistency,omitempty"`
+	Repair          *RepairReport          `json:"repair,omitempty"`
+	EventCompaction *EventCompactionReport `json:"event_compaction,omitempty"`
+	Error           string                 `json:"error,omitempty"`
 }
 
 // Scheduler runs stale-run recovery as a periodic operational job.
 type Scheduler struct {
 	recoverer *Recoverer
 	checker   *ConsistencyChecker
+	store     state.Store
 	cfg       SchedulerConfig
 }
 
@@ -43,6 +58,7 @@ func NewScheduler(store state.Store, q queue.Queue, cfg SchedulerConfig) *Schedu
 	return &Scheduler{
 		recoverer: NewRecoverer(store, q),
 		checker:   NewConsistencyChecker(store),
+		store:     store,
 		cfg:       normalizeSchedulerConfig(cfg),
 	}
 }
@@ -83,6 +99,16 @@ func (s *Scheduler) RunOnce(ctx context.Context) (*SchedulerReport, error) {
 		}
 	}
 
+	if s.cfg.EventCompactionEnabled {
+		compaction, err := s.compactRunEvents(ctx)
+		if err != nil {
+			report.DurationMS = time.Since(start).Milliseconds()
+			report.Error = err.Error()
+			return report, err
+		}
+		report.EventCompaction = compaction
+	}
+
 	report.DurationMS = time.Since(start).Milliseconds()
 	return report, nil
 }
@@ -117,7 +143,44 @@ func normalizeSchedulerConfig(cfg SchedulerConfig) SchedulerConfig {
 	if cfg.Limit <= 0 {
 		cfg.Limit = 200
 	}
+	if cfg.EventCompactionWindow <= 0 {
+		cfg.EventCompactionWindow = 24 * time.Hour
+	}
 	return cfg
+}
+
+func (s *Scheduler) compactRunEvents(ctx context.Context) (*EventCompactionReport, error) {
+	cutoff := time.Now().UTC().Add(-s.cfg.EventCompactionWindow).Unix()
+	report := &EventCompactionReport{
+		BeforeTS: cutoff,
+	}
+
+	runs, err := s.store.ListRuns(ctx, s.cfg.TenantID, []model.RunStatus{
+		model.RunStatusSucceeded,
+		model.RunStatusFailed,
+		model.RunStatusAborted,
+	}, s.cfg.Limit)
+	if err != nil {
+		return report, fmt.Errorf("list runs for compaction: %w", err)
+	}
+	report.RunsScanned = len(runs)
+
+	for _, run := range runs {
+		if run == nil || run.EndedAt == nil {
+			continue
+		}
+		if run.EndedAt.UTC().Unix() > cutoff {
+			continue
+		}
+		removed, err := s.store.CompactEvents(ctx, run.TaskID, run.RunID, cutoff)
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("task=%s run=%s: %v", run.TaskID, run.RunID, err))
+			continue
+		}
+		report.RunsCompacted++
+		report.EventsRemoved += removed
+	}
+	return report, nil
 }
 
 func logSchedulerReport(report *SchedulerReport, runErr error) {

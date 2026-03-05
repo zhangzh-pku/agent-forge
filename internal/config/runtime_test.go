@@ -113,6 +113,8 @@ func TestLoadRecoveryRuntimeConfigFromEnv(t *testing.T) {
 	t.Setenv("AGENTFORGE_RECOVERY_TENANT_ID", "tnt_1")
 	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_CHECK", "true")
 	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR", "true")
+	t.Setenv("AGENTFORGE_RECOVERY_EVENT_COMPACTION_ENABLED", "true")
+	t.Setenv("AGENTFORGE_RECOVERY_EVENT_COMPACTION_WINDOW", "72h")
 
 	cfg, err := LoadRecoveryRuntimeConfigFromEnv()
 	if err != nil {
@@ -136,6 +138,12 @@ func TestLoadRecoveryRuntimeConfigFromEnv(t *testing.T) {
 	if !cfg.ConsistencyCheck || !cfg.ConsistencyRepair {
 		t.Fatalf("unexpected consistency flags: %+v", cfg)
 	}
+	if !cfg.EventCompactionEnabled {
+		t.Fatal("expected event compaction enabled")
+	}
+	if cfg.EventCompactionWindow != 72*time.Hour {
+		t.Fatalf("unexpected event compaction window: %s", cfg.EventCompactionWindow)
+	}
 }
 
 func TestLoadRecoveryRuntimeConfigFromEnvInvalidRepairWithoutCheck(t *testing.T) {
@@ -143,6 +151,13 @@ func TestLoadRecoveryRuntimeConfigFromEnvInvalidRepairWithoutCheck(t *testing.T)
 	t.Setenv("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR", "true")
 	if _, err := LoadRecoveryRuntimeConfigFromEnv(); err == nil {
 		t.Fatal("expected error when repair is enabled without check")
+	}
+}
+
+func TestLoadRecoveryRuntimeConfigFromEnvInvalidCompactionWindow(t *testing.T) {
+	t.Setenv("AGENTFORGE_RECOVERY_EVENT_COMPACTION_WINDOW", "0")
+	if _, err := LoadRecoveryRuntimeConfigFromEnv(); err == nil {
+		t.Fatal("expected error for non-positive compaction window")
 	}
 }
 

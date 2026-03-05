@@ -116,22 +116,26 @@ func main() {
 	}
 	if recoveryCfg.Enabled {
 		recoveryScheduler := ops.NewScheduler(store, q, ops.SchedulerConfig{
-			Interval:          recoveryCfg.Interval,
-			StaleFor:          recoveryCfg.StaleFor,
-			Limit:             recoveryCfg.Limit,
-			TenantID:          recoveryCfg.TenantID,
-			ConsistencyCheck:  recoveryCfg.ConsistencyCheck,
-			ConsistencyRepair: recoveryCfg.ConsistencyRepair,
+			Interval:               recoveryCfg.Interval,
+			StaleFor:               recoveryCfg.StaleFor,
+			Limit:                  recoveryCfg.Limit,
+			TenantID:               recoveryCfg.TenantID,
+			ConsistencyCheck:       recoveryCfg.ConsistencyCheck,
+			ConsistencyRepair:      recoveryCfg.ConsistencyRepair,
+			EventCompactionEnabled: recoveryCfg.EventCompactionEnabled,
+			EventCompactionWindow:  recoveryCfg.EventCompactionWindow,
 		})
 		go func() {
 			log.Printf(
-				"Recovery scheduler enabled (interval=%s, stale_for=%s, limit=%d, tenant=%q, consistency_check=%t, consistency_repair=%t)",
+				"Recovery scheduler enabled (interval=%s, stale_for=%s, limit=%d, tenant=%q, consistency_check=%t, consistency_repair=%t, event_compaction_enabled=%t, event_compaction_window=%s)",
 				recoveryCfg.Interval,
 				recoveryCfg.StaleFor,
 				recoveryCfg.Limit,
 				recoveryCfg.TenantID,
 				recoveryCfg.ConsistencyCheck,
 				recoveryCfg.ConsistencyRepair,
+				recoveryCfg.EventCompactionEnabled,
+				recoveryCfg.EventCompactionWindow,
 			)
 			recoveryScheduler.Start(ctx)
 		}()

@@ -10,16 +10,17 @@ import (
 )
 
 const (
-	DefaultConnectionsTaskIndex           = "task-index"
-	DefaultSQSWaitTimeSeconds     int32   = 20
-	DefaultSQSVisibilityTimeout   int32   = 300
-	DefaultSQSMaxMessages         int32   = 10
-	DefaultRecoveryLimit          int32   = 200
-	DefaultArtifactPresignExpires         = 15 * time.Minute
-	DefaultRecoveryStaleFor               = 10 * time.Minute
-	DefaultEventRetention                 = 24 * time.Hour
-	DefaultOTelExporter                   = "none"
-	DefaultOTelSampleRatio        float64 = 1.0
+	DefaultConnectionsTaskIndex                  = "task-index"
+	DefaultSQSWaitTimeSeconds            int32   = 20
+	DefaultSQSVisibilityTimeout          int32   = 300
+	DefaultSQSMaxMessages                int32   = 10
+	DefaultRecoveryLimit                 int32   = 200
+	DefaultArtifactPresignExpires                = 15 * time.Minute
+	DefaultRecoveryStaleFor                      = 10 * time.Minute
+	DefaultRecoveryEventCompactionWindow         = 24 * time.Hour
+	DefaultEventRetention                        = 24 * time.Hour
+	DefaultOTelExporter                          = "none"
+	DefaultOTelSampleRatio               float64 = 1.0
 )
 
 // RuntimeMode controls which backend implementations the app should use.
@@ -73,13 +74,15 @@ type AWSRuntimeConfig struct {
 
 // RecoveryRuntimeConfig controls stale-run recovery and consistency checks.
 type RecoveryRuntimeConfig struct {
-	Enabled           bool
-	Interval          time.Duration
-	StaleFor          time.Duration
-	Limit             int
-	TenantID          string
-	ConsistencyCheck  bool
-	ConsistencyRepair bool
+	Enabled                bool
+	Interval               time.Duration
+	StaleFor               time.Duration
+	Limit                  int
+	TenantID               string
+	ConsistencyCheck       bool
+	ConsistencyRepair      bool
+	EventCompactionEnabled bool
+	EventCompactionWindow  time.Duration
 }
 
 // TelemetryRuntimeConfig controls OpenTelemetry runtime behavior.
@@ -219,15 +222,28 @@ func LoadRecoveryRuntimeConfigFromEnv() (*RecoveryRuntimeConfig, error) {
 	if repair && !check {
 		return nil, fmt.Errorf("AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR requires AGENTFORGE_RECOVERY_CONSISTENCY_CHECK=true")
 	}
+	compactionEnabled, err := Bool("AGENTFORGE_RECOVERY_EVENT_COMPACTION_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	compactionWindow, err := Duration("AGENTFORGE_RECOVERY_EVENT_COMPACTION_WINDOW", DefaultRecoveryEventCompactionWindow)
+	if err != nil {
+		return nil, err
+	}
+	if compactionWindow <= 0 {
+		return nil, fmt.Errorf("invalid AGENTFORGE_RECOVERY_EVENT_COMPACTION_WINDOW: must be > 0")
+	}
 
 	return &RecoveryRuntimeConfig{
-		Enabled:           enabled,
-		Interval:          interval,
-		StaleFor:          staleFor,
-		Limit:             int(limit),
-		TenantID:          String("AGENTFORGE_RECOVERY_TENANT_ID", ""),
-		ConsistencyCheck:  check,
-		ConsistencyRepair: repair,
+		Enabled:                enabled,
+		Interval:               interval,
+		StaleFor:               staleFor,
+		Limit:                  int(limit),
+		TenantID:               String("AGENTFORGE_RECOVERY_TENANT_ID", ""),
+		ConsistencyCheck:       check,
+		ConsistencyRepair:      repair,
+		EventCompactionEnabled: compactionEnabled,
+		EventCompactionWindow:  compactionWindow,
 	}, nil
 }
 

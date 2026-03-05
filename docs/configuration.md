@@ -46,6 +46,8 @@ Used by `cmd/recovery`, and optionally by `cmd/taskapi` when enabling background
 | `AGENTFORGE_RECOVERY_TENANT_ID` | _(empty)_ | Optional tenant scope; empty scans all tenants. |
 | `AGENTFORGE_RECOVERY_CONSISTENCY_CHECK` | `false` | Enables drift check pass after stale-run recovery. |
 | `AGENTFORGE_RECOVERY_CONSISTENCY_REPAIR` | `false` | Applies consistency repairs (requires consistency check enabled). |
+| `AGENTFORGE_RECOVERY_EVENT_COMPACTION_ENABLED` | `false` | Enables automatic event compaction for old terminal runs during scheduler passes. |
+| `AGENTFORGE_RECOVERY_EVENT_COMPACTION_WINDOW` | `24h` | Retention window for replay events; events older than `now-window` are compacted for ended runs. |
 
 Notes:
 - `cmd/recovery` always executes at least one pass on startup.
