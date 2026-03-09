@@ -13,7 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.56.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.2
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.3
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.22
+	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.23
 	github.com/aws/smithy-go v1.24.2
 	go.opentelemetry.io/contrib/propagators/aws v1.41.0
 	go.opentelemetry.io/otel v1.41.0
